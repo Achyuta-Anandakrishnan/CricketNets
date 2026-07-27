@@ -1,7 +1,7 @@
 # CricketNets — Roadmap
 
 ## Done
-- **M1 — Live trajectory + speed.** 240 fps capture, `VNDetectTrajectoriesRequest`, on-screen path.
+- **M1 — Live trajectory + speed.** 120 fps capture, `VNDetectTrajectoriesRequest`, on-screen path.
 - **M2 — Calibration.** LiDAR/reference scene calibration; launch vector (speed, angle, azimuth).
 - **M3 — Field + scoring.** Draggable field, physics scoring (drag + bounce + roll), wagon wheel, stats.
 - **Live path wired end-to-end.** Camera → calibration → scoring → result banner, automatically.
@@ -11,6 +11,10 @@
 - **Per-shot metrics + list.** Each ball records speed & launch angle; ball-by-ball list + top-speed stat.
 - **Undo last shot.**
 - **Persistence.** Field, ball calibration, tuning, and the current session survive relaunches.
+- **3D (LiDAR) tracking mode.** Depth-resolved world samples → measured azimuth. Nets tab now picks
+  between fast 2D (120 fps, no left/right) and 3D (~60 fps, real left/right).
+- **Live HUD.** Mini shot map, speed / launch angle / direction pills, and a depth resolve-rate
+  readout so 3D mode's failure modes are visible.
 
 ## Now — Stabilization (current focus)
 The app works end-to-end but is buggy on device. Priorities, in order:
@@ -31,7 +35,8 @@ The app works end-to-end but is buggy on device. Priorities, in order:
 ## Next — Accuracy & trust
 - **Verify the metric scale** on device against a tape measure (the LiDAR landscape ↔ tracking
   portrait reconciliation flagged in `LiDARCalibrator`).
-- **True-3D azimuth** via the LiDAR tracking path so left/right is measured, not estimated.
+- **Verify 3D mode on device.** The maths is unit-tested, but whether LiDAR actually resolves a
+  cricket ball at net range is unproven — watch the resolve rate in the HUD.
 - **Tune scoring feel** with real shots; expose a couple of `ScoringEngine.Params` in a debug panel.
 
 ## Later — Product depth
@@ -55,6 +60,7 @@ The app works end-to-end but is buggy on device. Priorities, in order:
 | Freeze when opening a calibration screen | High | Depth camera conflict fixed; ball calibration runs its own short-lived session |
 | Tracking picks up non-ball motion | High | Motion mask + gates; **Testing mode** added to see + tune live |
 | Filters too strict (real shots rejected) | High | Defaults loosened (motion 0.06, conf 0.5, len 6); tune in Testing mode |
-| Azimuth (left/right) unmeasurable from one 2D camera | Medium | Fixed the fake value (was pinned to ±45°); now reported as 0. Real fix: LiDAR 3D path |
+| Azimuth (left/right) unmeasurable from one 2D camera | Medium | Fixed the fake value (was pinned to ±45°); 2D now reports 0, and **3D mode measures it for real** |
+| LiDAR may not resolve a ball at net range | High | Unproven — nearest-confident-depth sampling + a resolve-rate readout to make it visible on device |
 | Speed uncalibrated until Depth/reference set | Medium | Working as intended; calibrate to fix |
 | `xcodebuild` CLI broken in this env (Xcode components) | Low | No longer reproducing — CLI build + `test` both succeed against an iPhone 16 Pro simulator |

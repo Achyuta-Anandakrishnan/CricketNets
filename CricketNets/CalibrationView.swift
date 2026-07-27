@@ -76,8 +76,8 @@ struct CalibrationView: View {
     }
 }
 
-/// Renders a LiDARCalibrator's ARSession so the user can aim.
-private struct ARPreview: UIViewRepresentable {
+/// Renders an ARSession so the user can aim. Shared with the 3D tracking screen.
+struct ARPreview: UIViewRepresentable {
     let session: ARSession
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView()

@@ -14,7 +14,7 @@ and watch those boundaries turn into catches.
 - **Coaches** who want a shot map and simple metrics (strike rate, boundary %, dismissals) from a session.
 - **Casual players** who want a fun, competitive layer on net sessions.
 
-Target device: **iPhone 16 Pro** (240 fps slow-motion capture + LiDAR). Other recent iPhones work
+Target device: **iPhone 16 Pro** (120 fps capture + LiDAR). Other recent iPhones work
 with reduced accuracy; LiDAR features degrade gracefully.
 
 ## The core idea
@@ -27,7 +27,7 @@ and motivating for practice, not a broadcast officiating tool.
 
 ## How it works (pipeline)
 ```
-Camera (240fps)
+Camera (120fps)
   → VNDetectTrajectories        detect the ball's parabolic path in the image
   → Ball color gate             reject anything that isn't the calibrated ball (hands, bat, people)
   → Calibration (LiDAR/ref)     convert image motion into real speed + geometry
@@ -39,7 +39,7 @@ Camera (240fps)
 ## Features today
 | Area | What you get |
 |------|--------------|
-| **Nets tab** | Live camera, trajectory overlay, speed readout, auto-scored shots, ball + depth calibration |
+| **Nets tab** | Two tracking modes (fast 2D / 3D LiDAR), live overlay, speed + launch angle + direction, a mini shot map, auto-scored shots, ball + depth calibration |
 | **Field tab** | Drag 10 fielders + keeper anywhere; standard preset (right/left-hander); slider "test shot" |
 | **Stats tab** | Wagon wheel (shots colored by outcome), runs, balls, strike rate, 4s/6s, wickets, dots, boundary % |
 
@@ -53,9 +53,11 @@ tab and calibration need the physical device.
   where you put fielders. That's the product promise, and it's real.
 
 ## Known limitations (by design or pending)
-- Left/right **azimuth is not measured from a single 2D camera** — camera-tracked shots are scored as
-  straight down the ground until the LiDAR 3D path lands. The wagon wheel is therefore only as wide as
-  the Field tab's manual shots for now.
+- Left/right **azimuth is only measured in 3D (LiDAR) mode**. Fast 2D mode scores every shot as straight
+  down the ground, because a single side-on camera genuinely cannot see left/right.
+- **3D mode needs the ball within ~5 m** of the phone, and a cricket ball covers only a few pixels of
+  the depth map — depth resolution is the mode's main accuracy risk and the thing most needing
+  real-device testing.
 - Scoring is an **estimate** extrapolated from a short net trajectory.
 - **Ball tracking accuracy is the biggest open risk** and the thing most in need of real-device testing.
 - See `ROADMAP.md` for the current stability issues and plan.

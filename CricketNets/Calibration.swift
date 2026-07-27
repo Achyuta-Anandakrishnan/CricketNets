@@ -22,7 +22,7 @@ struct SceneCalibration: Equatable {
     var planeDistance: Double
     /// Camera height above the ground (m). Sets where the launch point sits vertically.
     var cameraHeight: Double
-    /// Frame rate of the tracker that produced the trajectory (240 for the M1 fast path).
+    /// Frame rate of the tracker that produced the trajectory (120 for the M1 fast path).
     var fps: Double
     /// How the calibration was obtained — surfaced in the UI so the user knows to trust it or not.
     var source: Source

@@ -184,7 +184,8 @@ final class TrajectoryDetector {
     }
 
     /// Total path length of a trajectory in normalized units — how far the object actually travelled.
-    private static func pathLength(_ points: [VNPoint]) -> Double {
+    /// Shared with the depth tracker, which applies the same gates to ARKit frames.
+    static func pathLength(_ points: [VNPoint]) -> Double {
         guard points.count >= 2 else { return 0 }
         var len = 0.0
         for i in 1..<points.count {
@@ -197,9 +198,9 @@ final class TrajectoryDetector {
 
     /// Fraction of a trajectory's points whose pixels match the ball color (0…1). Samples up to
     /// 6 points spread along the path — a real ball is its color everywhere; a stray blob isn't.
-    private static func colorFraction(of obs: VNTrajectoryObservation,
-                                      in pixelBuffer: CVPixelBuffer,
-                                      profile: BallProfile) -> Double {
+    static func colorFraction(of obs: VNTrajectoryObservation,
+                              in pixelBuffer: CVPixelBuffer,
+                              profile: BallProfile) -> Double {
         let pts = obs.detectedPoints
         guard !pts.isEmpty else { return 0 }
         let stride = max(1, pts.count / 6)

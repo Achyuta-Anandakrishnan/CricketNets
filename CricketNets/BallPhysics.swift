@@ -28,23 +28,90 @@ struct LandingPoint {
 enum BallPhysics {
     static let g = 9.81
 
-    // MARK: 3D path (LiDAR-informed, most accurate)
+    // MARK: 3D path (LiDAR-informed — the only path that can actually measure azimuth)
 
-    /// Estimate the launch vector from 3D world points (meters, y up) sampled at `fps`.
-    /// Uses the first two points for the initial velocity; a short linear fit could replace this
-    /// for noise resistance once you see real data.
-    static func launchVector(worldPoints: [simd_float3], fps: Double) -> LaunchVector? {
-        guard worldPoints.count >= 2 else { return nil }
-        let dt = 1.0 / fps
-        let p0 = worldPoints[0], p1 = worldPoints[1]
-        let v = (p1 - p0) / Float(dt)
-        let vx = Double(v.x), vy = Double(v.y), vz = Double(v.z)
+    /// One tracked 3D position and the moment it was seen.
+    ///
+    /// Samples are deliberately *timestamped* rather than assumed evenly spaced: the depth tracker
+    /// drops any frame where the ball wasn't detected or where LiDAR had no confident reading, so
+    /// gaps in the sequence are normal and a fixed `1/fps` step would quietly skew the fit.
+    struct WorldSample: Equatable {
+        var position: simd_float3   // ARKit world meters, y up
+        var time: TimeInterval      // ARFrame timestamp (seconds)
+
+        init(position: simd_float3, time: TimeInterval) {
+            self.position = position
+            self.time = time
+        }
+    }
+
+    /// Estimate the launch vector from timed 3D world points.
+    ///
+    /// Unlike the 2D path this measures all three components for real — depth is observed, so a
+    /// square cut and a straight drive are finally distinguishable.
+    ///
+    /// - Parameter groundDirection: the horizontal direction (ARKit world x/z) that counts as
+    ///   "straight down the ground". Azimuth is measured from it, positive toward the camera's
+    ///   right. Capture this when the user aims the phone rather than assuming a world axis.
+    static func launchVector(worldSamples samples: [WorldSample],
+                             groundDirection: simd_float2) -> LaunchVector? {
+        guard samples.count >= 3 else { return nil }
+        let t0 = samples[0].time
+        let times = samples.map { $0.time - t0 }
+        guard let last = times.last, last > 0 else { return nil }
+
+        guard
+            let fitX = linearFit(times: times, values: samples.map { Double($0.position.x) }),
+            let fitY = linearFit(times: times, values: samples.map { Double($0.position.y) }),
+            let fitZ = linearFit(times: times, values: samples.map { Double($0.position.z) })
+        else { return nil }
+
+        let vx = fitX.slope
+        let vz = fitZ.slope
+        // Only the vertical axis is accelerating, so only it needs gravity added back.
+        let vy = fitY.slope + g * fitY.accelWeight / 2
+
         let horizontal = (vx * vx + vz * vz).squareRoot()
         let speed = (vx * vx + vy * vy + vz * vz).squareRoot()
-        let elevation = atan2(vy, horizontal)
-        // ARKit world: -Z is "forward" (away from where the camera faced). Treat that as down-ground.
-        let azimuth = atan2(vx, -vz)
-        return LaunchVector(speed: speed, elevation: elevation, azimuth: azimuth, height: Double(p0.y))
+        guard speed > 0 else { return nil }
+
+        // Project the horizontal velocity onto the aimed "down the ground" axis and the axis square
+        // to it. For a horizontal forward (x, z), the camera's right is (−z, x).
+        let forward = simd_normalize(groundDirection)
+        let right = simd_float2(-forward.y, forward.x)
+        let horizVelocity = simd_float2(Float(vx), Float(vz))
+        let along = Double(simd_dot(horizVelocity, forward))
+        let across = Double(simd_dot(horizVelocity, right))
+
+        return LaunchVector(speed: speed,
+                            elevation: atan2(vy, horizontal),
+                            azimuth: atan2(across, along),
+                            height: Double(samples[0].position.y))
+    }
+
+    /// Least-squares linear fit of `values` against `times`.
+    ///
+    /// For a coordinate following p(t) = p₀ + v₀·t − ½a·t², the least-squares slope across the
+    /// samples is not v₀ but `v₀ − a·C/2`, where `C = Σ(tᵢ − t̄)tᵢ² / Σ(tᵢ − t̄)²`. Returning `C` as
+    /// `accelWeight` lets an accelerating axis recover its initial rate with `slope + a·accelWeight/2`;
+    /// a drag-free horizontal axis just ignores it.
+    ///
+    /// Times must be measured from the first sample, so `accelWeight` is relative to that point.
+    private static func linearFit(times: [Double], values: [Double]) -> (slope: Double, accelWeight: Double)? {
+        let n = Double(times.count)
+        guard n >= 2, times.count == values.count else { return nil }
+        let meanT = times.reduce(0, +) / n
+        let meanV = values.reduce(0, +) / n
+
+        var stt = 0.0, stv = 0.0, stt2 = 0.0
+        for (t, v) in zip(times, values) {
+            let dt = t - meanT
+            stt += dt * dt
+            stv += dt * (v - meanV)
+            stt2 += dt * t * t
+        }
+        guard stt > 0 else { return nil }
+        return (stv / stt, stt2 / stt)
     }
 
     // MARK: 2D path (fast tracker + calibration; azimuth is NOT observable — see below)
@@ -136,8 +203,10 @@ struct ShotAnalysis {
         return ShotAnalysis(launch: launch, landing: BallPhysics.land(launch))
     }
 
-    static func from3D(worldPoints: [simd_float3], fps: Double) -> ShotAnalysis? {
-        guard let launch = BallPhysics.launchVector(worldPoints: worldPoints, fps: fps) else { return nil }
+    static func from3D(worldSamples: [BallPhysics.WorldSample],
+                       groundDirection: simd_float2) -> ShotAnalysis? {
+        guard let launch = BallPhysics.launchVector(worldSamples: worldSamples,
+                                                    groundDirection: groundDirection) else { return nil }
         return ShotAnalysis(launch: launch, landing: BallPhysics.land(launch))
     }
 }

@@ -47,7 +47,7 @@ final class MotionMasker {
                        bounds: CGRect(x: 0, y: 0, width: w, height: h),
                        colorSpace: colorSpace)
 
-        return Self.wrap(output, timing: Self.timing(of: sample))
+        return SampleBufferFactory.make(from: output, timing: Self.timing(of: sample))
     }
 
     // MARK: Plumbing
@@ -76,22 +76,4 @@ final class MotionMasker {
         return buffer
     }
 
-    private static func wrap(_ pixelBuffer: CVPixelBuffer, timing: CMSampleTimingInfo) -> CMSampleBuffer? {
-        var formatDesc: CMVideoFormatDescription?
-        CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault,
-                                                     imageBuffer: pixelBuffer,
-                                                     formatDescriptionOut: &formatDesc)
-        guard let formatDesc else { return nil }
-        var timing = timing
-        var out: CMSampleBuffer?
-        CMSampleBufferCreateForImageBuffer(allocator: kCFAllocatorDefault,
-                                           imageBuffer: pixelBuffer,
-                                           dataReady: true,
-                                           makeDataReadyCallback: nil,
-                                           refcon: nil,
-                                           formatDescription: formatDesc,
-                                           sampleTiming: &timing,
-                                           sampleBufferOut: &out)
-        return out
-    }
 }

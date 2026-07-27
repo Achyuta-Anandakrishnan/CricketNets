@@ -1,4 +1,5 @@
 import SwiftUI
+import simd
 
 /// Shared state across tabs. Your field, ball calibration, tuning, and current session all persist
 /// across launches so you don't have to set everything up again each time.
@@ -44,9 +45,19 @@ final class AppState: ObservableObject {
 
     // MARK: Scoring
 
-    /// The end-to-end step: a completed 2D trajectory → launch vector → scored outcome.
+    /// The end-to-end step for the fast 2D path: trajectory → launch vector → scored outcome.
+    /// Azimuth is 0 here — a single side-on camera can't see left/right (see `BallPhysics`).
     func record(imagePoints: [CGPoint]) {
         guard let analysis = ShotAnalysis.from2D(imagePoints: imagePoints, calibration: calibration) else { return }
+        record(launch: analysis.launch)
+    }
+
+    /// The LiDAR 3D path: depth-resolved world samples → launch vector → scored outcome.
+    /// This is the one where azimuth is measured rather than assumed, so shots land across the
+    /// wagon wheel instead of on a single line.
+    func record(worldSamples: [BallPhysics.WorldSample], groundDirection: simd_float2) {
+        guard let analysis = ShotAnalysis.from3D(worldSamples: worldSamples,
+                                                 groundDirection: groundDirection) else { return }
         record(launch: analysis.launch)
     }
 
@@ -90,7 +101,9 @@ final class AppState: ObservableObject {
         return try? JSONDecoder().decode(type, from: data)
     }
 
-    /// Called only from init, so these assignments don't retrigger the didSet saves.
+    /// Restore the last session. Note these assignments DO fire the `didSet` saves — property
+    /// observers are live by the time `init` calls this — so each launch harmlessly rewrites what
+    /// it just read. Cheap enough to leave alone; don't add expensive work to those observers.
     private func load() {
         if let f = Self.decode(Field.self, Key.field) { field = f }
         if let sh = Self.decode([ScoreResult].self, Key.shots) { shots = sh; lastShot = sh.last }

@@ -10,7 +10,7 @@ This milestone proves the hard part works before we build the field + scoring on
 | File | Role |
 |------|------|
 | `CricketNetsApp.swift` | App entry point |
-| `CameraController.swift` | AVFoundation capture at 240fps, feeds frames to the detector |
+| `CameraController.swift` | AVFoundation capture at 120fps, feeds frames to the detector |
 | `TrajectoryDetector.swift` | Wraps `VNDetectTrajectoriesRequest` (Apple's parabolic-path detector) |
 | `ContentView.swift` | Camera preview + live trajectory overlay + speed HUD |
 
@@ -24,7 +24,11 @@ This milestone proves the hard part works before we build the field + scoring on
    - Key: `Privacy - Camera Usage Description` (`NSCameraUsageDescription`)
    - Value: `Track the ball during net practice.`
 4. **Signing**: Signing & Capabilities → select your Team.
-5. **Run on device** — the camera and 240fps do **not** work in the Simulator, so plug in the iPhone 16 Pro and run there.
+5. **Run on device** — the camera and high-frame-rate capture do **not** work in the Simulator, so plug in the iPhone 16 Pro and run there.
+
+> **Frame rate:** the code targets **120 fps**, not 240 (`CameraController.targetFPS`). 240 combined with
+> per-frame Vision overheated the phone and got the app killed for memory; 120 is still plenty to catch a
+> ball. The device picks the fastest format it supports up to that.
 
 ## How to test it
 
@@ -40,10 +44,13 @@ This milestone proves the hard part works before we build the field + scoring on
 
 ## Tuning knobs if detection is flaky
 
-In `TrajectoryDetector.swift`:
-- `objectMinimumNormalizedRadius` / `objectMaximumNormalizedRadius` — widen if the ball isn't picked up, narrow if it locks onto the wrong thing.
-- `trajectoryLength` — raise for steadier (but slower-to-appear) paths.
-- confidence threshold (`> 0.5`) — lower to catch more, raise to reject noise.
+In `TrajectoryDetector.swift` (current defaults in brackets):
+- `defaultMinRadius` / `defaultMaxRadius` [0.003 / 0.20] — the size gate used before a ball is calibrated. Widen if the ball isn't picked up, narrow if it locks onto the wrong thing. Once you calibrate a ball, `BallProfile.minRadius` / `maxRadius` [0.005 / 0.06] replace these.
+- `trajectoryLength` [5] — raise for steadier (but slower-to-appear) paths.
+- `minTrajectoryMotion` [0.03] — how far a path must span, as a fraction of the frame, to count as a shot.
+- `minConfidence` [0.3] — lower to catch more, raise to reject noise.
+
+The last two are also live sliders in **Testing mode**, which is the faster way to tune them.
 
 ## Milestone 2 — Calibration + LiDAR (added)
 
@@ -57,10 +64,10 @@ Turns the green line into real numbers: **speed, launch angle, and left/right az
 
 ### The key architecture decision
 
-**240fps and LiDAR can't run together** — ARKit scene depth caps at 60fps. So LiDAR is used as a short **calibration step**, not for live tracking:
+**High-frame-rate capture and LiDAR can't run together** — ARKit scene depth caps at 60fps. So on the fast path LiDAR is used as a short **calibration step**, not for live tracking:
 
-1. Aim the phone down the net, tap **Calibrate** → `LiDARCalibrator` reads the distance to the ball's flight plane and derives meters-per-frame-width.
-2. That `SceneCalibration` flows into `CalibrationStore`, which feeds the fast **240fps 2D tracker** from M1.
+1. Aim the phone down the net, tap **Depth** → `LiDARCalibrator` reads the distance to the ball's flight plane and derives meters-per-frame-width.
+2. That `SceneCalibration` is held by `AppState`, which pushes it into `TrajectoryDetector.Calibration` so the fast **120fps 2D tracker** from M1 reports real speed.
 3. Every tracked shot now reports real speed + elevation, and `BallPhysics` projects a landing point.
 
 Two ways to calibrate:
@@ -68,7 +75,7 @@ Two ways to calibrate:
 - **Reference (manual):** `SceneCalibration.fromReference(...)` — mark two stumps in the frame (`CricketConstants.wicketWidth`). Works on non-LiDAR phones too.
 
 ### Honest limits at this stage
-- **Azimuth is not measured on the 2D fast path — it is reported as 0 (straight).** A single side-on view genuinely cannot separate a square hit from a straight one: both trace the same path across the image, and the sign of the horizontal drift tells you which way *down the ground*, not which side of the wicket. The code no longer guesses. Real left/right needs the **LiDAR 3D path** (`ShotAnalysis.from3D`), which is still to be wired up.
+- **Azimuth is not measured on the 2D fast path — it is reported as 0 (straight).** A single side-on view genuinely cannot separate a square hit from a straight one: both trace the same path across the image, and the sign of the horizontal drift tells you which way *down the ground*, not which side of the wicket. The code no longer guesses. Real left/right needs the **LiDAR 3D path** — see "3D tracking" below, which is now built.
 - **Speed from the 2D path is a lower bound** — it's the flight speed projected onto the image plane, so a ball hit toward or away from the camera reads slow. Elevation is directly observable and reliable.
 - **Physics ignores air drag/swing** — real carry is a bit shorter at high speed. Fine for scoring zones; note it to users.
 - **Verify the metric scale against a tape measure once** — the orientation reconciliation between the ARKit calibration pass (landscape) and the tracking pass (portrait) is the one number worth sanity-checking on device. Flagged in `LiDARCalibrator.makeCalibration`.
@@ -129,6 +136,48 @@ The **field you drag in the Field tab is the field the camera scores against** �
 - Status shows on the Nets tab: **"Tracking the ball only"** (green) vs **"Tracking everything"** (orange).
 
 Tune `hueTol` / `satTol` / `valTol` in `BallProfile` if it's too strict (misses the ball) or too loose (still catches noise).
+
+## 3D tracking — azimuth becomes a measurement (added)
+
+The Nets tab now has two modes, picked before you start:
+
+| Mode | Frame rate | Speed | Left/right |
+|------|-----------|-------|-----------|
+| **Fast (2D)** | 120 fps | Best | **Not measured** — reported as straight |
+| **3D (LiDAR)** | ~60 fps | Good | **Measured** |
+
+They can't run together: ARKit's scene depth caps the camera around 60 fps, so the fast path trades
+depth for frames and the depth path trades frames for depth.
+
+| File | Role |
+|------|------|
+| `DepthTrajectoryTracker.swift` | ARKit session + Vision, unprojecting each trajectory point through the depth map into world space |
+| `ShotHUD.swift` | Shared live readouts — mini field, metric pills, tracking badge, result banner |
+| `DepthNetsView.swift` | The 3D mode screen |
+
+### How it works
+1. ARKit delivers a frame with `sceneDepth`. `VNDetectTrajectoriesRequest` runs on the captured image.
+2. The newest point of the winning trajectory is looked up in **that same frame's** depth map, so
+   every 3D point is unprojected with its own depth — no stale-depth mismatch.
+3. Depth → camera space → ARKit world space. The samples are **timestamped**, because frames where
+   the ball wasn't detected (or where LiDAR wasn't confident) are simply missing.
+4. When points stop arriving, a least-squares fit across the samples gives velocity, with a gravity
+   correction on the vertical axis, and azimuth is projected onto the direction you aimed.
+
+### Set direction — don't skip it
+Azimuth is measured **from wherever you tell the app "down the ground" is**. Point the phone down the
+pitch and tap **Set direction** once per session. Without it, left/right is relative to an arbitrary
+ARKit world axis and the wagon wheel will be rotated.
+
+### Honest limits
+- **LiDAR reaches ~5 m.** Beyond that, readings collapse and shots stop resolving. Stand the phone close.
+- **A cricket ball is a few pixels in a 256×192 depth map.** Depth smoothing bleeds the background in,
+  so the tracker takes the *nearest confident* reading in a small patch rather than the mean — the ball
+  is always in front of what's behind it. This is the biggest accuracy risk in the mode.
+- **Fewer frames means fewer samples.** A fast flat shot may not produce the 3 samples a fit needs.
+  The HUD shows the resolve rate (`points/frames`) so this is visible rather than mysterious.
+- **Not testable in the Simulator.** ARKit scene depth needs the device; the mode shows a clear
+  "LiDAR unavailable" state elsewhere. The pure maths is covered by `DepthPathTests`.
 
 ## Roadmap
 

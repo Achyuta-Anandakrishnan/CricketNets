@@ -1,8 +1,37 @@
 import SwiftUI
 import AVFoundation
 
+/// Which tracker is driving the Nets tab. They can't run at once — ARKit's scene depth caps the
+/// camera around 60fps, so the fast path gives up depth to get frames and the depth path gives up
+/// frames to get depth.
+enum TrackingMode: String, CaseIterable, Identifiable {
+    case fast, depth
+    var id: String { rawValue }
+    var label: String { self == .fast ? "Fast (2D)" : "3D (LiDAR)" }
+    var blurb: String {
+        switch self {
+        case .fast:  return "120 fps. Best speed accuracy. Can't see left/right."
+        case .depth: return "~60 fps. Measures left/right for real. Needs the ball within 5 m."
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var app: AppState
+    @State private var mode: TrackingMode = .fast
+
+    var body: some View {
+        switch mode {
+        case .fast:  FastNetsView(mode: $mode)
+        case .depth: DepthNetsView(mode: $mode)
+        }
+    }
+}
+
+/// The 120fps AVFoundation path: best speed reading, no azimuth.
+struct FastNetsView: View {
+    @EnvironmentObject var app: AppState
+    @Binding var mode: TrackingMode
     @StateObject private var camera = CameraController()
     @State private var matchRunning = false
     @State private var showCalibration = false
@@ -24,13 +53,12 @@ struct ContentView: View {
                 idleBackground
             }
 
-            VStack {
-                if matchRunning {
-                    HStack { speedBadge; Spacer(); trackingBadge }.padding()
-                }
+            VStack(spacing: 0) {
+                if matchRunning { topHUD }
                 Spacer()
                 if matchRunning, let shot = app.lastShot {
-                    resultBanner(shot)
+                    ResultBanner(shot: shot, hand: app.hand)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 bottomControls
             }
@@ -118,6 +146,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
             } else {
+                ModePicker(mode: $mode)
                 calibrationBar
                 Button(action: startMatch) {
                     Label("Start match", systemImage: "play.fill")
@@ -136,83 +165,55 @@ struct ContentView: View {
         .background(.black.opacity(0.45))
     }
 
-    private func resultBanner(_ shot: ScoreResult) -> some View {
-        VStack(spacing: 4) {
-            Text(shot.outcome.label)
-                .font(.system(size: 34, weight: .heavy, design: .rounded))
-                .foregroundStyle(shot.outcome.isWicket ? .red : .white)
-            Text(shot.commentary)
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.8))
+    /// Live speed + the shot map, side by side. The mini field is the reason to keep your eyes here
+    /// rather than switching to the Stats tab between balls.
+    private var topHUD: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 12) {
+                MetricPill(value: "\(Int(camera.speedKmh))",
+                           label: "km/h",
+                           accent: .white,
+                           caveat: app.isCalibrated ? nil : "uncalibrated")
+                if let shot = app.lastShot {
+                    MetricPill(value: "\(Int(shot.launchAngleDeg))°", label: "launch", accent: .green)
+                }
+            }
+            .padding(12)
+            .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 16))
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 8) {
+                TrackingBadge(state: badgeState)
+                MiniField(field: app.field, lastShot: app.lastShot, liveAzimuth: nil)
+                    .frame(width: 108, height: 108)
+                    .background(.black.opacity(0.35), in: Circle())
+                // Fast mode can't see left/right, so say so next to the map that implies it can.
+                Text("2D — direction not measured")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange.opacity(0.85))
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(.black.opacity(0.5))
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .animation(.spring, value: shot)
+        .padding()
+    }
+
+    private var badgeState: TrackingBadge.State {
+        if camera.cooldownRemaining > 0 { return .cooldown(camera.cooldownRemaining) }
+        return camera.hasTrajectory ? .tracking : .ready
     }
 
     private var calibrationBar: some View {
         VStack(spacing: 8) {
-            statusRow(
-                ok: app.isBallCalibrated,
-                onText: "Tracking the ball only",
-                offText: "Tracking everything — calibrate the ball",
-                button: "Ball"
-            ) { showBallCalibration = true }
+            StatusRow(ok: app.isBallCalibrated,
+                      text: app.isBallCalibrated ? "Tracking the ball only"
+                                                 : "Tracking everything — calibrate the ball",
+                      button: "Ball") { showBallCalibration = true }
 
-            statusRow(
-                ok: app.isCalibrated,
-                onText: "Distance set (\(app.calibration.source.rawValue))",
-                offText: "No distance — speeds are rough",
-                button: "Depth"
-            ) { camera.stop(); showCalibration = true }
+            StatusRow(ok: app.isCalibrated,
+                      text: app.isCalibrated ? "Distance set (\(app.calibration.source.rawValue))"
+                                             : "No distance — speeds are rough",
+                      button: "Depth") { camera.stop(); showCalibration = true }
         }
-    }
-
-    private func statusRow(ok: Bool, onText: String, offText: String,
-                           button: String, action: @escaping () -> Void) -> some View {
-        HStack {
-            Circle().fill(ok ? .green : .orange).frame(width: 8, height: 8)
-            Text(ok ? onText : offText)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.85))
-            Spacer()
-            Button(button, action: action)
-                .font(.caption.bold())
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-        }
-    }
-
-    private var speedBadge: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(Int(camera.speedKmh))")
-                .font(.system(size: 44, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .contentTransition(.numericText())
-            Text(app.isCalibrated ? "km/h" : "km/h (uncalibrated)")
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.6))
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var trackingBadge: some View {
-        Group {
-            if camera.cooldownRemaining > 0 {
-                Text("NEXT BALL IN \(camera.cooldownRemaining)s")
-                    .foregroundStyle(.orange)
-            } else if camera.hasTrajectory {
-                Text("● TRACKING").foregroundStyle(.green)
-            } else {
-                Text("○ READY").foregroundStyle(.white.opacity(0.6))
-            }
-        }
-        .font(.caption.bold())
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.black.opacity(0.4), in: Capsule())
     }
 
     private var permissionOverlay: some View {
