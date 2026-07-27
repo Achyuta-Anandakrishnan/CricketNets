@@ -71,8 +71,22 @@ struct TestingView: View {
     private var panel: some View {
         VStack(spacing: 12) {
             legend
-            slider("Min motion", $minMotion, 0...0.30, "%.2f") { camera.setMinMotion($0) }
-            slider("Min confidence", $minConf, 0...1, "%.2f") { camera.setMinConfidence($0) }
+            TunableSlider(
+                title: "How far the ball must travel",
+                value: $minMotion,
+                range: 0...0.30,
+                reading: TuningWords.travel,
+                guidance: "Left = accepts smaller movements, so slow shots register but so does background wobble.",
+                onEdit: { camera.setMinMotion($0) }
+            )
+            TunableSlider(
+                title: "How certain before counting it",
+                value: $minConf,
+                range: 0...1,
+                reading: TuningWords.certainty,
+                guidance: "Left = counts shakier detections, catching more real shots and more noise.",
+                onEdit: { camera.setMinConfidence($0) }
+            )
             HStack(spacing: 20) {
                 Toggle("Motion mask", isOn: $motionMask)
                     .onChange(of: motionMask) { _, v in camera.setMotionMask(v) }
@@ -102,19 +116,6 @@ struct TestingView: View {
 
     private func legendDot(_ c: Color, _ t: String) -> some View {
         HStack(spacing: 4) { Circle().fill(c).frame(width: 8, height: 8); Text(t) }
-    }
-
-    private func slider(_ label: String, _ value: Binding<Double>, _ range: ClosedRange<Double>,
-                        _ fmt: String, onEdit: @escaping (Double) -> Void) -> some View {
-        HStack {
-            Text(label).font(.caption).foregroundStyle(.white.opacity(0.85))
-                .frame(width: 120, alignment: .leading)
-            Slider(value: value, in: range).tint(.green)
-                .onChange(of: value.wrappedValue) { _, v in onEdit(v) }
-            Text(String(format: fmt, value.wrappedValue))
-                .font(.caption.monospacedDigit()).foregroundStyle(.white)
-                .frame(width: 46, alignment: .trailing)
-        }
     }
 
     private func pushParams() {

@@ -22,6 +22,14 @@ struct DepthTestingView: View {
     @State private var colorGate = true
 
     var body: some View {
+        GeometryReader { root in
+            content
+                .onAppear { tracker.viewport = root.size }
+                .onChange(of: root.size) { _, size in tracker.viewport = size }
+        }
+    }
+
+    private var content: some View {
         ZStack {
             if tracker.isSupported {
                 ARPreview(session: tracker.session).ignoresSafeArea()
@@ -56,14 +64,22 @@ struct DepthTestingView: View {
     private var ballOverlay: some View {
         GeometryReader { geo in
             if let p = tracker.lastBallPoint, let reading = tracker.lastReading {
-                let center = CGPoint(x: p.x * geo.size.width, y: p.y * geo.size.height)
-                // The patch is in depth-map pixels; scale to the view by the depth map's width.
-                let patchPoints = CGFloat(reading.radiusPx) / 256 * geo.size.width
+                // Image space is landscape, the preview is portrait — go through the transform or
+                // the marker slides sideways when the ball moves up.
+                let t = tracker.displayTransform
+                let c = p.applying(t)
+                let center = CGPoint(x: c.x * geo.size.width, y: c.y * geo.size.height)
+
+                // The patch is in depth-map pixels; convert to a fraction of the image, then to view.
+                let patchNormalized = CGFloat(reading.radiusPx) / 256
+                let edge = CGPoint(x: p.x + patchNormalized, y: p.y).applying(t)
+                let edgePoint = CGPoint(x: edge.x * geo.size.width, y: edge.y * geo.size.height)
+                let radius = max(9, hypot(edgePoint.x - center.x, edgePoint.y - center.y))
 
                 ZStack {
                     Circle()
                         .stroke(reading.confidence > 0.5 ? Color.green : Color.orange, lineWidth: 2)
-                        .frame(width: max(18, patchPoints * 2), height: max(18, patchPoints * 2))
+                        .frame(width: radius * 2, height: radius * 2)
                     Circle()
                         .fill(.white)
                         .frame(width: 4, height: 4)
@@ -134,8 +150,22 @@ struct DepthTestingView: View {
         VStack(spacing: 12) {
             placement
             Divider().overlay(.white.opacity(0.2))
-            slider("Min motion", $minMotion, 0...0.30) { tracker.setMinTrajectoryMotion($0) }
-            slider("Min confidence", $minConf, 0...1) { tracker.setMinConfidence(Float($0)) }
+            TunableSlider(
+                title: "How far the ball must travel",
+                value: $minMotion,
+                range: 0...0.30,
+                reading: TuningWords.travel,
+                guidance: "Left = accepts smaller movements, so slow or short shots register but so does background wobble.",
+                onEdit: { tracker.setMinTrajectoryMotion($0) }
+            )
+            TunableSlider(
+                title: "How certain before counting it",
+                value: $minConf,
+                range: 0...1,
+                reading: TuningWords.certainty,
+                guidance: "Left = counts shakier detections, catching more real shots and more noise.",
+                onEdit: { tracker.setMinConfidence(Float($0)) }
+            )
 
             HStack(spacing: 16) {
                 Toggle("Colour gate", isOn: $colorGate)
@@ -175,18 +205,18 @@ struct DepthTestingView: View {
             Text(app.phonePlacement.blurb)
                 .font(.caption2).foregroundStyle(.white.opacity(0.6))
 
-            HStack {
-                Text("Offset").font(.caption).foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 60, alignment: .leading)
-                Slider(value: $app.groundOffsetDeg, in: -180...180, step: 1).tint(.cyan)
-                    .onChange(of: app.groundOffsetDeg) { _, v in
-                        if app.phonePlacement != .custom { app.phonePlacement = .custom }
-                        tracker.setGroundOffset(v)
-                    }
-                Text("\(Int(app.groundOffsetDeg))°")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.white)
-                    .frame(width: 44, alignment: .trailing)
-            }
+            TunableSlider(
+                title: "Which way is down the ground",
+                value: $app.groundOffsetDeg,
+                range: -180...180,
+                reading: TuningWords.groundOffset,
+                guidance: "Turn this until a ball hit straight reads as “straight” below.",
+                step: 1,
+                onEdit: { v in
+                    if app.phonePlacement != .custom { app.phonePlacement = .custom }
+                    tracker.setGroundOffset(v)
+                }
+            )
 
             HStack(spacing: 10) {
                 Button {
@@ -224,19 +254,6 @@ struct DepthTestingView: View {
                     .font(.subheadline).multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.6)).padding(.horizontal, 40)
             }
-        }
-    }
-
-    private func slider(_ label: String, _ value: Binding<Double>,
-                        _ range: ClosedRange<Double>, onEdit: @escaping (Double) -> Void) -> some View {
-        HStack {
-            Text(label).font(.caption).foregroundStyle(.white.opacity(0.85))
-                .frame(width: 110, alignment: .leading)
-            Slider(value: value, in: range).tint(.green)
-                .onChange(of: value.wrappedValue) { _, v in onEdit(v) }
-            Text(String(format: "%.2f", value.wrappedValue))
-                .font(.caption.monospacedDigit()).foregroundStyle(.white)
-                .frame(width: 44, alignment: .trailing)
         }
     }
 

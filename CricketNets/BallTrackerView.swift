@@ -33,8 +33,28 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
     let isSupported = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     let session = ARSession()
 
+    /// Maps captured-image normalized coordinates onto the preview.
+    ///
+    /// ARKit's `capturedImage` is camera-native landscape while the preview is rendered portrait,
+    /// so image x and y do not correspond to view x and y — drawing an overlay straight from image
+    /// coordinates makes it travel across the screen at right angles to the thing it's tracking.
+    /// `ARFrame.displayTransform` fixes the rotation *and* the aspect-fill crop, which a hardcoded
+    /// 90° rotation would leave offset.
+    ///
+    /// Only the overlay needs this. The detection and depth lookups all work in captured-image
+    /// space against intrinsics and a depth map in that same space, so they stay self-consistent.
+    @Published private(set) var displayTransform: CGAffineTransform = .identity
+
     private let captureID = UUID()
     private let queue = DispatchQueue(label: "cricketnets.balltracker")
+
+    /// Written by the view, read on the frame queue.
+    private let viewportLock = NSLock()
+    private var _viewport = CGSize(width: 390, height: 844)
+    var viewport: CGSize {
+        get { viewportLock.lock(); defer { viewportLock.unlock() }; return _viewport }
+        set { viewportLock.lock(); _viewport = newValue; viewportLock.unlock() }
+    }
 
     /// Main-thread copy; `queueProfile` is the one the delegate reads.
     private var baseProfile: BallProfile?
@@ -108,8 +128,11 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
         let depthMap = frame.sceneDepth?.depthMap
         let confidenceMap = frame.sceneDepth?.confidenceMap
 
+        let transform = frame.displayTransform(for: .portrait, viewportSize: viewport)
+
         guard let profile = queueProfile else {
-            publish(nil, optical: 0, lidar: 0, error: "No ball calibrated — calibrate a ball first.")
+            publish(nil, optical: 0, lidar: 0, transform: transform,
+                    error: "No ball calibrated — calibrate a ball first.")
             return
         }
 
@@ -134,15 +157,17 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
             }
         }
 
-        publish(found, optical: optical, lidar: lidar, error: nil)
+        publish(found, optical: optical, lidar: lidar, transform: transform, error: nil)
     }
 
     private func publish(_ found: BallDetector.Detection?,
-                         optical: Double, lidar: Double, error: String?) {
+                         optical: Double, lidar: Double,
+                         transform: CGAffineTransform, error: String?) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             framesSeen += 1
             detection = found
+            displayTransform = transform
             lastError = error
             if found != nil {
                 framesWithBall += 1
@@ -159,6 +184,15 @@ struct BallTrackerView: View {
     @StateObject private var model = BallTrackerModel()
 
     var body: some View {
+        GeometryReader { root in
+            content
+                // The display transform depends on the viewport's aspect, so keep it current.
+                .onAppear { model.viewport = root.size }
+                .onChange(of: root.size) { _, size in model.viewport = size }
+        }
+    }
+
+    private var content: some View {
         ZStack {
             if model.isSupported {
                 ARPreview(session: model.session).ignoresSafeArea()
@@ -182,11 +216,21 @@ struct BallTrackerView: View {
     }
 
     /// A ring drawn where the ball was found, at the size it was found.
+    ///
+    /// Both the centre and the radius go through the display transform: the rotation turns a
+    /// horizontal offset in the image into a vertical one on screen, so measuring the radius after
+    /// transforming is the only way to get it right under aspect-fill scaling.
     private var overlay: some View {
         GeometryReader { geo in
             if let d = model.detection {
-                let center = CGPoint(x: d.center.x * geo.size.width, y: d.center.y * geo.size.height)
-                let radius = max(12, d.radiusNormalized * geo.size.width)
+                let t = model.displayTransform
+                let c = d.center.applying(t)
+                let edge = CGPoint(x: d.center.x + d.radiusNormalized, y: d.center.y).applying(t)
+
+                let center = CGPoint(x: c.x * geo.size.width, y: c.y * geo.size.height)
+                let edgePoint = CGPoint(x: edge.x * geo.size.width, y: edge.y * geo.size.height)
+                let radius = max(12, hypot(edgePoint.x - center.x, edgePoint.y - center.y))
+
                 ZStack {
                     Circle()
                         .stroke(d.looksLikeABall ? Color.green : Color.orange, lineWidth: 3)
@@ -240,15 +284,14 @@ struct BallTrackerView: View {
     private var panel: some View {
         VStack(spacing: 12) {
             distances
-            HStack {
-                Text("Tolerance").font(.caption).foregroundStyle(.white.opacity(0.85))
-                    .frame(width: 78, alignment: .leading)
-                Slider(value: $model.tolerance, in: 0.5...8).tint(.cyan)
-                Text(String(format: "%.1f×", model.tolerance))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.white)
-                    .frame(width: 40, alignment: .trailing)
-            }
-            Text("Drag Tolerance up until the ring locks onto the ball. If it never does, the calibrated colour is wrong — recalibrate under the light you're actually playing in.")
+            TunableSlider(
+                title: "How fussy about colour",
+                value: $model.tolerance,
+                range: 0.5...8,
+                reading: TuningWords.colourStrictness,
+                guidance: "Right = accepts more shades, so it finds the ball more easily but may grab other things too."
+            )
+            Text("Drag right until the ring locks onto the ball. If it never does at any setting, the saved colour is wrong for this light — recalibrate the ball here.")
                 .font(.caption2).foregroundStyle(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button("Reset counts") { model.resetCounts() }

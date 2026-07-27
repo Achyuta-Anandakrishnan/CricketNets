@@ -98,8 +98,21 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
     // MARK: arQueue-confined state
 
+    /// Maps captured-image normalized coordinates onto the preview. See `BallTrackerModel` — the
+    /// captured image is landscape while the preview is portrait, so overlays need this or they
+    /// travel at right angles to what they're tracking.
+    @Published private(set) var displayTransform: CGAffineTransform = .identity
+
     private let arQueue = DispatchQueue(label: "cricketnets.depth.ar")
     private let captureID = UUID()
+
+    /// Written by the view, read on the frame queue.
+    private let viewportLock = NSLock()
+    private var _viewport = CGSize(width: 390, height: 844)
+    var viewport: CGSize {
+        get { viewportLock.lock(); defer { viewportLock.unlock() }; return _viewport }
+        set { viewportLock.lock(); _viewport = newValue; viewportLock.unlock() }
+    }
     /// Distinguishes the live tracker from the testing screen's own instance in the arbiter.
     var ownerName = "3D tracking"
 
@@ -231,6 +244,9 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
         let timestamp = frame.timestamp
         let intrinsics = frame.camera.intrinsics
         let cameraTransform = frame.camera.transform
+
+        let transform = frame.displayTransform(for: .portrait, viewportSize: viewport)
+        DispatchQueue.main.async { [weak self] in self?.displayTransform = transform }
 
         guard let sample = SampleBufferFactory.make(from: pixelBuffer, timestamp: timestamp) else { return }
 

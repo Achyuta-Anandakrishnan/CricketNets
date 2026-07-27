@@ -179,6 +179,92 @@ struct StatusRow: View {
     }
 }
 
+// MARK: - Tuning controls
+
+/// A slider that says what it does and what its current setting means.
+///
+/// The tuning knobs are internal thresholds — a normalized path length, a Vision confidence, a
+/// tolerance multiplier — and their raw values ("0.03") say nothing about what will happen if you
+/// drag them. This shows a plain-language reading of the current value plus which way to go when
+/// something is wrong, so the screen can be used without knowing the implementation.
+struct TunableSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    /// Human-readable version of the current value, e.g. "Normal" or "crosses 3% of the frame".
+    let reading: (Double) -> String
+    /// One line on which way to drag, and what the cost is.
+    let guidance: String
+    var step: Double = 0
+    var onEdit: (Double) -> Void = { _ in }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text(reading(value))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.cyan)
+            }
+            slider
+            Text(guidance)
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    @ViewBuilder
+    private var slider: some View {
+        if step > 0 {
+            Slider(value: $value, in: range, step: step).tint(.cyan)
+                .onChange(of: value) { _, v in onEdit(v) }
+        } else {
+            Slider(value: $value, in: range).tint(.cyan)
+                .onChange(of: value) { _, v in onEdit(v) }
+        }
+    }
+}
+
+/// Plain-language readings for the tuning values, kept together so the wording stays consistent
+/// wherever a knob appears.
+enum TuningWords {
+
+    /// Colour tolerance multiplier: 1.0 is exactly what was calibrated.
+    static func colourStrictness(_ multiplier: Double) -> String {
+        switch multiplier {
+        case ..<0.9:  return "Very strict"
+        case ..<1.6:  return "As calibrated"
+        case ..<3:    return "Relaxed"
+        case ..<5:    return "Loose"
+        default:      return "Almost anything"
+        }
+    }
+
+    /// Minimum path length, as a fraction of the frame.
+    static func travel(_ fraction: Double) -> String {
+        fraction < 0.005 ? "any movement" : "crosses \(Int(fraction * 100))% of view"
+    }
+
+    /// Vision's confidence threshold.
+    static func certainty(_ value: Double) -> String {
+        switch value {
+        case ..<0.2:  return "\(Int(value * 100))% — accept almost all"
+        case ..<0.5:  return "\(Int(value * 100))% — balanced"
+        default:      return "\(Int(value * 100))% — only sure ones"
+        }
+    }
+
+    /// Rotation from the phone's aim to "down the ground".
+    static func groundOffset(_ degrees: Double) -> String {
+        if abs(degrees) < 3 { return "aimed down the ground" }
+        let side = degrees > 0 ? "right" : "left"
+        return "\(Int(abs(degrees)))° to the \(side)"
+    }
+}
+
 // MARK: - Ball colour
 
 /// The colour the tracker is actually matching against.
