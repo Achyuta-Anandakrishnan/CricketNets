@@ -69,6 +69,12 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
         rebuildProfile()
     }
 
+    /// Which space pixels are judged in. Switchable live so the two can be compared on a real ball
+    /// rather than argued about in the abstract.
+    @Published var space: BallProfile.ColourSpace = .chroma {
+        didSet { rebuildProfile() }
+    }
+
     /// Scale the calibrated tolerances by the slider. 1.0 is exactly what was calibrated.
     private func rebuildProfile() {
         guard var p = baseProfile else {
@@ -76,9 +82,8 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
             queue.async { [weak self] in self?.queueProfile = nil }
             return
         }
-        p.hueTol = min(0.5, p.hueTol * tolerance)
-        p.satTol = min(1.0, p.satTol * tolerance)
-        p.valTol = min(1.0, p.valTol * tolerance)
+        p.space = space
+        p = p.loosened(by: tolerance)
         activeProfileForDisplay = p
         queue.async { [weak self] in self?.queueProfile = p }
     }
@@ -291,6 +296,15 @@ struct BallTrackerView: View {
     private var panel: some View {
         VStack(spacing: 12) {
             distances
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Colour space", selection: $model.space) {
+                    ForEach(BallProfile.ColourSpace.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text(model.space.blurb)
+                    .font(.system(size: 9)).foregroundStyle(.white.opacity(0.55))
+            }
+
             TunableSlider(
                 title: "How fussy about colour",
                 value: $model.tolerance,

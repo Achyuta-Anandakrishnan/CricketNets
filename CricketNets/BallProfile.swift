@@ -21,9 +21,61 @@ struct BallProfile: Equatable, Codable {
     var minRadius: Double = 0.005
     var maxRadius: Double = 0.06
 
+    /// Which space a pixel is judged in. Not persisted — it's a tuning choice, like the tolerances.
+    var space: ColourSpace = .chroma
+    /// Chroma-space match radius. One number instead of HSV's three boxes.
+    ///
+    /// Sized against measured separations: for a blue ball, grey sits ~1.17 away and grass ~1.37,
+    /// so 0.35 absorbs shading and mild glare with plenty of margin before anything else matches.
+    var chromaTol: Double = 0.35
+
     // Persist only the measured color + size gate; tolerances always come from the current defaults.
     enum CodingKeys: String, CodingKey {
         case hue, saturation, brightness, minRadius, maxRadius
+    }
+
+    /// How a pixel is compared with the calibrated ball.
+    enum ColourSpace: String, CaseIterable, Identifiable, Codable {
+        /// Hue/saturation/brightness with a box tolerance on each.
+        case hsv
+        /// Blue- and red-difference chroma, with a single distance tolerance.
+        case chroma
+
+        var id: String { rawValue }
+        var label: String { self == .hsv ? "HSV" : "Chroma" }
+        var blurb: String {
+            switch self {
+            case .hsv:    return "Hue, saturation and brightness, each within its own tolerance."
+            case .chroma: return "Colour independent of brightness. Handles shade and glare on a shiny ball better."
+            }
+        }
+    }
+
+    /// The calibrated colour as blue/red-difference chroma.
+    ///
+    /// Derived from the stored HSV rather than persisted separately, so old calibrations keep
+    /// working and there's a single source of truth for what the ball looks like.
+    var chroma: (cb: Double, cr: Double) {
+        let rgb = BallColor.hsvToRGB(hue, saturation, brightness)
+        return BallColor.rgbToChroma(rgb.0, rgb.1, rgb.2)
+    }
+
+    /// Judge a pixel in whichever space is selected.
+    ///
+    /// Takes RGB rather than HSV because chroma matching doesn't need the HSV conversion at all —
+    /// on a frame with tens of thousands of samples, skipping it is worth having.
+    func matches(r: Double, g: Double, b: Double) -> Bool {
+        switch space {
+        case .hsv:
+            let hsv = BallColor.rgbToHSV(r, g, b)
+            return matches(h: hsv.h, s: hsv.s, v: hsv.v)
+        case .chroma:
+            let sample = BallColor.rgbToChroma(r, g, b)
+            let reference = chroma
+            // A plain distance in the chroma plane. Brightness is deliberately absent: it's what
+            // shade, glare and motion blur all change, and none of them change the ball's colour.
+            return hypot(sample.cb - reference.cb, sample.cr - reference.cr) <= chromaTol
+        }
     }
 
     func matches(h: Double, s: Double, v: Double) -> Bool {
@@ -252,6 +304,21 @@ enum BallColor {
         default:
             return nil
         }
+    }
+
+    /// Blue- and red-difference chroma (BT.601), **divided by luma**.
+    ///
+    /// The division is the whole point and easy to leave out. Raw Cb/Cr are differences from luma,
+    /// so they scale with it: halve the light on a ball and its raw chroma halves too, which reads
+    /// as a different colour. Only the *direction* survives scaling, not the magnitude. Dividing by
+    /// luma keeps both, so a ball in shade and the same ball in sun land on the same point.
+    ///
+    /// The floor stops near-black pixels — where the ratio is all noise — from exploding.
+    static func rgbToChroma(_ r: Double, _ g: Double, _ b: Double) -> (cb: Double, cr: Double) {
+        let y = 0.299 * r + 0.587 * g + 0.114 * b
+        let denominator = max(y, 0.04)
+        return (cb: (b - y) * 0.564 / denominator,
+                cr: (r - y) * 0.713 / denominator)
     }
 
     static func rgbToHSV(_ r: Double, _ g: Double, _ b: Double) -> (h: Double, s: Double, v: Double) {

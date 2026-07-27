@@ -96,8 +96,7 @@ enum BallDetector {
                     let x = bounds.x0 + col * step
                     guard x <= bounds.x1 else { break }
                     let (r, g, b) = reader.rgb(x: x, y: y)
-                    let hsv = BallColor.rgbToHSV(r, g, b)
-                    if profile.matches(h: hsv.h, s: hsv.s, v: hsv.v) {
+                    if profile.matches(r: r, g: g, b: b) {
                         mask[row * cols + col] = true
                         totalMatched += 1
                     }

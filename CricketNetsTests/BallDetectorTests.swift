@@ -110,6 +110,7 @@ final class BallDetectorTests: XCTestCase {
         // Concentration reads a perfect 1.0 in that case — every match IS in the blob — so coverage
         // is the only thing that catches it.
         var loose = blueProfile()
+        loose.space = .hsv   // this case is about HSV's box tolerances specifically
         loose.hueTol = 1; loose.satTol = 1; loose.valTol = 1
         let buffer = frame(ballCenter: CGPoint(x: 0.5, y: 0.5), ballRadius: 10, ball: blue)
         let found = try XCTUnwrap(BallDetector.detect(in: buffer, profile: loose))

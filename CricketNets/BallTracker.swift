@@ -136,6 +136,10 @@ extension BallProfile {
         copy.hueTol = min(0.5, hueTol * factor)
         copy.satTol = min(1.0, satTol * factor)
         copy.valTol = min(1.0, valTol * factor)
+        // Normalized chroma spans roughly 0...2, so the ceiling is far above HSV's 0...1 channels.
+        // For reference, grey sits ~1.17 from a blue ball, so tracking's 2.5x (0.88) stays clear of
+        // it while the user slider can still be dragged to "matches almost anything".
+        copy.chromaTol = min(1.5, chromaTol * factor)
         return copy
     }
 }

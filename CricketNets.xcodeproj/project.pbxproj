@@ -21,6 +21,7 @@
 		2C427514896CAEFF99FF5713 /* FieldAndStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE8B3BCD9966FEF40CBC269 /* FieldAndStatsTests.swift */; };
 		42414B11FB2D8D36FC8B44E6 /* ShotHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821AA510F7C59C1681EEFCF9 /* ShotHUD.swift */; };
 		4E0EA6F1D671E7D5196C553A /* ScoringEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C56FFB2AA2C00E453BBCA227 /* ScoringEngine.swift */; };
+		50762202578B048CD55F11F0 /* ColourSpaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 438BC79DB31C7FE537B3652A /* ColourSpaceTests.swift */; };
 		57A62C2C1DD2018726CCFD51 /* BallTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F61D714BEF719AB72B4E125 /* BallTracker.swift */; };
 		5FC650490DD476F95B3B7648 /* FieldView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64F48D56F237F5DB7CF5601 /* FieldView.swift */; };
 		66660470CAC0845ED24AD753 /* CaptureArbiter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C78289D2632AC665DCE899 /* CaptureArbiter.swift */; };
@@ -66,6 +67,7 @@
 		39F84A2A5A6765D42709E06A /* PlacementAndDepthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementAndDepthTests.swift; sourceTree = "<group>"; };
 		3EA4F905C9066A78340E073E /* BallTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallTrackerTests.swift; sourceTree = "<group>"; };
 		40F25B8FA0C708D4CA482A29 /* DepthNetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthNetsView.swift; sourceTree = "<group>"; };
+		438BC79DB31C7FE537B3652A /* ColourSpaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColourSpaceTests.swift; sourceTree = "<group>"; };
 		43BDCBEA86A7C46FBA136ECF /* TestingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestingView.swift; sourceTree = "<group>"; };
 		492C37A7043C88EAF2FBD49B /* PixelFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelFormatTests.swift; sourceTree = "<group>"; };
 		4B2906851B0E0267555C459E /* ShotAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShotAssemblerTests.swift; sourceTree = "<group>"; };
@@ -149,6 +151,7 @@
 				B7A0FFFB5A48EDAE9565B714 /* BallPhysicsTests.swift */,
 				B91FA7BDFE3A901BE7F8CF21 /* BallProfileTests.swift */,
 				3EA4F905C9066A78340E073E /* BallTrackerTests.swift */,
+				438BC79DB31C7FE537B3652A /* ColourSpaceTests.swift */,
 				4B9125E59258AD3ABDD06117 /* DepthPathTests.swift */,
 				6FE8B3BCD9966FEF40CBC269 /* FieldAndStatsTests.swift */,
 				492C37A7043C88EAF2FBD49B /* PixelFormatTests.swift */,
@@ -264,6 +267,7 @@
 				730F5CCEBBD8A3A504E7F51A /* BallPhysicsTests.swift in Sources */,
 				9898FDBFFA5902591ECDBB9E /* BallProfileTests.swift in Sources */,
 				C6091EAB4049E83E55BB01FB /* BallTrackerTests.swift in Sources */,
+				50762202578B048CD55F11F0 /* ColourSpaceTests.swift in Sources */,
 				BDECB2CC288E1B9DF8B98644 /* DepthPathTests.swift in Sources */,
 				2C427514896CAEFF99FF5713 /* FieldAndStatsTests.swift in Sources */,
 				EA835AEF62FDB5137BB7F48D /* PixelFormatTests.swift in Sources */,
@@ -342,7 +346,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -381,7 +385,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
