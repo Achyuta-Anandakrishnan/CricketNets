@@ -21,6 +21,19 @@ final class AppState: ObservableObject {
     /// Scoring "match conditions" the user can tune (outfield pace, catching difficulty).
     @Published var scoringParams = ScoringEngine.Params() { didSet { save(scoringParams, Key.params) } }
 
+    /// Where the phone is standing, and the rotation from its aim to "down the ground". Persisted
+    /// because a net setup tends to be the same one session to the next.
+    @Published var phonePlacement: PhonePlacement = .downTheGround {
+        didSet {
+            UserDefaults.standard.set(phonePlacement.rawValue, forKey: Key.placement)
+            // Adopt the preset's angle, except for custom, which the user owns.
+            if phonePlacement != .custom { groundOffsetDeg = phonePlacement.defaultOffsetDegrees }
+        }
+    }
+    @Published var groundOffsetDeg: Double = 0 {
+        didSet { UserDefaults.standard.set(groundOffsetDeg, forKey: Key.offset) }
+    }
+
     /// Calibration flows into the detector's static config so the live speed HUD uses real numbers.
     /// Not persisted — it's tied to where the phone is physically set up, so recalibrate each session.
     @Published var calibration: SceneCalibration = .untuned {
@@ -86,6 +99,7 @@ final class AppState: ObservableObject {
     private enum Key {
         static let field = "cn.field", shots = "cn.shots", ball = "cn.ball"
         static let preset = "cn.preset", hand = "cn.hand", params = "cn.params"
+        static let placement = "cn.placement", offset = "cn.groundOffset"
     }
 
     private func save<T: Encodable>(_ value: T?, _ key: String) {
@@ -111,6 +125,12 @@ final class AppState: ObservableObject {
         if let p = Self.decode(ScoringEngine.Params.self, Key.params) { scoringParams = p }
         if let s = UserDefaults.standard.string(forKey: Key.preset), let p = Field.Preset(rawValue: s) { preset = p }
         if let s = UserDefaults.standard.string(forKey: Key.hand), let h = Field.Hand(rawValue: s) { hand = h }
+        if let s = UserDefaults.standard.string(forKey: Key.placement),
+           let p = PhonePlacement(rawValue: s) { phonePlacement = p }
+        // Read the offset after the placement, whose didSet would otherwise stomp a custom angle.
+        if UserDefaults.standard.object(forKey: Key.offset) != nil {
+            groundOffsetDeg = UserDefaults.standard.double(forKey: Key.offset)
+        }
     }
 
     private func pushCalibrationToDetector() {

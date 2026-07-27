@@ -39,6 +39,15 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     /// Distance (m) the depth map reported at the last detected ball position.
     @Published private(set) var lastBallDistance: Double = 0
     @Published private(set) var depthQuality: DepthQuality = .noReading
+    /// Where the ball was last seen, Vision-normalized with a top-left origin. Drives the testing
+    /// overlay so you can see whether the depth patch is actually landing on the ball.
+    @Published private(set) var lastBallPoint: CGPoint?
+    /// The full depth lookup behind the last frame — patch size, confident pixel count, distance.
+    @Published private(set) var lastReading: BallDepthReading?
+    /// Azimuth of the shot in progress, recomputed as samples arrive. Lets the testing screen give
+    /// immediate feedback while the phone placement is being adjusted, without waiting for a shot
+    /// to finish and score.
+    @Published private(set) var liveAzimuthDeg: Double?
     /// Frames seen vs frames that produced a usable 3D point — the honest hit rate of this path.
     @Published private(set) var framesSeen = 0
     @Published private(set) var pointsResolved = 0
@@ -61,6 +70,10 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     /// Horizontal (world x, z) direction the user aimed down the ground. Defaults to the camera's
     /// forward at session start, which is right if the phone is set up pointing down the pitch.
     private var groundDirection = simd_float2(0, -1)
+    /// The raw camera forward captured when aiming, kept so the offset can be re-applied without
+    /// making the user aim again.
+    private var aimedForward = simd_float2(0, -1)
+    private var groundOffsetDegrees: Double = 0
     private var settleWork: DispatchWorkItem?
 
     // MARK: arQueue-confined state
@@ -129,12 +142,26 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
         samples = []
     }
 
-    /// Lock the current aim as "straight down the ground". Azimuth is measured from here, which is
-    /// what makes left/right meaningful rather than relative to an arbitrary world axis.
-    func captureGroundDirection() {
+    /// Lock the current aim as the reference for azimuth, rotated by where the phone is standing.
+    ///
+    /// With `offsetDegrees` 0 this means "the phone is pointing down the ground". Set it to ±90 and
+    /// the phone can sit square of the wicket — a much better view of ball travel — while azimuth
+    /// still reads relative to the pitch.
+    func captureGroundDirection(offsetDegrees: Double = 0) {
         guard let frame = session.currentFrame else { return }
-        groundDirection = Self.horizontalForward(of: frame.camera.transform)
+        aimedForward = Self.horizontalForward(of: frame.camera.transform)
+        groundOffsetDegrees = offsetDegrees
+        groundDirection = PhonePlacement.rotate(aimedForward, byDegrees: offsetDegrees)
         hasGroundDirection = true
+    }
+
+    /// Re-derive the reference from the aim already captured. Lets the offset be tuned live — hit a
+    /// straight ball, nudge until it reads straight — without re-aiming the phone each time.
+    func setGroundOffset(_ degrees: Double) {
+        groundOffsetDegrees = degrees
+        guard hasGroundDirection else { return }
+        groundDirection = PhonePlacement.rotate(aimedForward, byDegrees: degrees)
+        recomputeLiveAzimuth()
     }
 
     /// Discard the shot in progress (e.g. a mis-track) without waiting for it to settle.
@@ -178,34 +205,44 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
             let best = bestObservation(in: request.results ?? [], colorSource: pixelBuffer),
             let newest = best.detectedPoints.last
         else {
-            publish(resolved: nil, distance: nil)
+            // No ball this frame — clear the overlay rather than leaving a stale marker on screen.
+            publish(resolved: nil, reading: nil, ballPoint: nil)
             return
         }
 
         // Vision reports a bottom-left origin; depth maps and camera intrinsics are top-left.
         let normalized = CGPoint(x: CGFloat(newest.x), y: 1 - CGFloat(newest.y))
-        let ballDepth = Self.nearestConfidentDepth(at: normalized,
-                                                   depthMap: depth.depthMap,
-                                                   confidenceMap: depth.confidenceMap)
-
-        guard let ballDepth,
-              ballDepth >= Self.minUsefulDepth,
-              ballDepth <= Self.maxUsefulDepth
-        else {
-            publish(resolved: nil, distance: ballDepth.map(Double.init))
-            return
-        }
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        // The depth map is lower-resolution than the captured image but covers the same field of
+        // view, so the focal length scales with the width ratio.
+        let depthWidth = CVPixelBufferGetWidth(depth.depthMap)
+        let depthFocal = intrinsics.columns.0.x * Float(depthWidth) / Float(max(width, 1))
+
+        let reading = Self.ballDepth(at: normalized,
+                                     depthMap: depth.depthMap,
+                                     confidenceMap: depth.confidenceMap,
+                                     depthFocalLengthPx: depthFocal)
+
+        guard let reading,
+              reading.distance >= Self.minUsefulDepth,
+              reading.distance <= Self.maxUsefulDepth
+        else {
+            publish(resolved: nil, reading: reading, ballPoint: normalized)
+            return
+        }
+
         let imagePoint = CGPoint(x: normalized.x * CGFloat(width), y: normalized.y * CGFloat(height))
         let cameraSpace = LiDARCalibrator.cameraSpacePoint(imagePoint: imagePoint,
-                                                           depth: ballDepth,
+                                                           depth: reading.distance,
                                                            intrinsics: intrinsics)
         let world = LiDARCalibrator.worldPoint(cameraSpace: cameraSpace, cameraTransform: cameraTransform)
 
         publish(resolved: BallPhysics.WorldSample(position: world, time: timestamp),
-                distance: Double(ballDepth))
+                reading: reading,
+                ballPoint: normalized)
     }
 
     /// The highest-confidence trajectory clearing the motion, confidence and color gates — the same
@@ -223,16 +260,64 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
         return best
     }
 
-    /// Nearest confident depth (m) in a small patch around a normalized (top-left origin) point.
+    /// What a depth lookup for the ball actually found — reported in full so the 3D testing screen
+    /// can show whether the patch is landing on the ball or on the net behind it.
+    struct BallDepthReading: Equatable {
+        let distance: Float      // metres, nearest confident reading in the patch
+        let radiusPx: Int        // patch radius actually used
+        let confidentPixels: Int // readings that passed the confidence gate
+        let sampledPixels: Int   // pixels inspected
+
+        /// Share of the patch that came back confident. A low value next to a plausible distance
+        /// usually means the ball is being missed and the reading is the background.
+        var confidence: Double {
+            sampledPixels > 0 ? Double(confidentPixels) / Double(sampledPixels) : 0
+        }
+    }
+
+    /// Apparent radius of a cricket ball in depth-map pixels at a given distance.
     ///
-    /// Takes the **minimum** rather than the mean on purpose: the ball is always in front of
-    /// whatever is behind it, and LiDAR's low resolution bleeds background depth into the handful
-    /// of pixels a cricket ball covers. The nearest confident reading in the patch is the one most
-    /// likely to be the ball rather than the net behind it.
+    /// A pinhole projection of a known real object: radius_px = (diameter/2) · focal / distance.
+    /// This is what lets the sampler cover the *whole ball* rather than a fixed guess — at 2 m the
+    /// ball spans several pixels, at 5 m barely one.
+    static func ballRadiusPixels(distance: Float, focalLengthPx: Float) -> Int {
+        guard distance > 0, focalLengthPx > 0 else { return 1 }
+        let radius = Float(CricketConstants.ballDiameter / 2) * focalLengthPx / distance
+        return max(1, Int(radius.rounded()))
+    }
+
+    /// Size the patch to the ball and read its distance.
+    ///
+    /// Two passes, because sizing the patch needs the distance and the distance needs a patch:
+    /// a small probe gets an approximate range, that sets the ball's apparent radius, and the real
+    /// read covers **the ball plus one pixel of margin** so a slightly-off centre still lands on it.
+    ///
+    /// Both passes take the **minimum** confident depth rather than the mean, on purpose: the ball
+    /// is always in front of whatever is behind it, and LiDAR's low resolution bleeds background
+    /// depth into the handful of pixels a ball covers. Averaging would drag the reading back toward
+    /// the net; the nearest confident reading is the one most likely to be the ball itself.
+    static func ballDepth(at p: CGPoint,
+                          depthMap: CVPixelBuffer,
+                          confidenceMap: CVPixelBuffer?,
+                          depthFocalLengthPx: Float) -> BallDepthReading? {
+        // Pass 1 — a tight probe just to get within range.
+        guard let probe = nearestConfidentDepth(at: p, depthMap: depthMap,
+                                                confidenceMap: confidenceMap, radius: 2),
+              probe.distance > 0
+        else { return nil }
+
+        // Pass 2 — the whole ball, plus one block of margin around it.
+        let radius = min(12, ballRadiusPixels(distance: probe.distance,
+                                              focalLengthPx: depthFocalLengthPx) + 1)
+        return nearestConfidentDepth(at: p, depthMap: depthMap,
+                                     confidenceMap: confidenceMap, radius: radius)
+    }
+
+    /// Nearest confident depth in a square patch around a normalized (top-left origin) point.
     static func nearestConfidentDepth(at p: CGPoint,
                                       depthMap: CVPixelBuffer,
                                       confidenceMap: CVPixelBuffer?,
-                                      radius: Int = 2) -> Float? {
+                                      radius: Int) -> BallDepthReading? {
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
         guard let depthBase = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
@@ -260,8 +345,10 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
         let cy = min(max(Int(p.y * CGFloat(h)), 0), h - 1)
 
         var nearest: Float?
+        var confident = 0, sampled = 0
         for y in max(0, cy - radius)...min(h - 1, cy + radius) {
             for x in max(0, cx - radius)...min(w - 1, cx + radius) {
+                sampled += 1
                 if let confidence {
                     let level = confidence.0.advanced(by: y * confidence.1)
                         .assumingMemoryBound(to: UInt8.self)[x]
@@ -271,21 +358,28 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
                 let value = depthBase.advanced(by: y * depthRowBytes)
                     .assumingMemoryBound(to: Float32.self)[x]
                 guard value > 0, value.isFinite else { continue }
+                confident += 1
                 if nearest == nil || value < nearest! { nearest = value }
             }
         }
-        return nearest
+        guard let nearest else { return nil }
+        return BallDepthReading(distance: nearest, radiusPx: radius,
+                                confidentPixels: confident, sampledPixels: sampled)
     }
 
     /// Hop a frame's outcome to the main thread, where the published state and shot assembly live.
-    private func publish(resolved: BallPhysics.WorldSample?, distance: Double?) {
+    private func publish(resolved: BallPhysics.WorldSample?,
+                         reading: BallDepthReading?,
+                         ballPoint: CGPoint?) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             framesSeen += 1
-            if let distance { lastBallDistance = distance }
+            lastBallPoint = ballPoint
+            lastReading = reading
+            if let reading { lastBallDistance = Double(reading.distance) }
             depthQuality = {
-                guard let distance, distance > 0 else { return .noReading }
-                return distance > Double(Self.maxUsefulDepth) ? .tooFar : .good
+                guard let reading, reading.distance > 0 else { return .noReading }
+                return reading.distance > Self.maxUsefulDepth ? .tooFar : .good
             }()
             guard let resolved else { return }
             pointsResolved += 1
@@ -302,6 +396,7 @@ private extension DepthTrajectoryTracker {
     func append(_ sample: BallPhysics.WorldSample) {
         samples.append(sample)
         isTracking = true
+        recomputeLiveAzimuth()
 
         settleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -314,5 +409,14 @@ private extension DepthTrajectoryTracker {
         }
         settleWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// Direction of the shot so far, so placement can be tuned without waiting for a full shot.
+    func recomputeLiveAzimuth() {
+        guard samples.count >= minSamplesPerShot,
+              let launch = BallPhysics.launchVector(worldSamples: samples,
+                                                    groundDirection: groundDirection)
+        else { return }
+        liveAzimuthDeg = launch.azimuthDeg
     }
 }

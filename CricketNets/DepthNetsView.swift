@@ -13,6 +13,7 @@ struct DepthNetsView: View {
     @StateObject private var tracker = DepthTrajectoryTracker()
 
     @State private var running = false
+    @State private var showTesting = false
 
     var body: some View {
         ZStack {
@@ -40,6 +41,24 @@ struct DepthNetsView: View {
             }
         }
         .onDisappear { stop() }
+        // The testing screen runs its own ARSession, so this one has to let go of the camera.
+        .fullScreenCover(isPresented: $showTesting, onDismiss: { if running { tracker.start() } }) {
+            DepthTestingView().environmentObject(app)
+        }
+        .onChange(of: showTesting) { _, shown in if shown { tracker.stop() } }
+    }
+
+    /// Where the phone is standing, settable before starting — the fine-tuning lives in testing mode.
+    private var placementSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Placement", selection: $app.phonePlacement) {
+                ForEach(PhonePlacement.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Text("\(app.phonePlacement.blurb) Offset \(Int(app.groundOffsetDeg))°.")
+                .font(.caption2).foregroundStyle(.white.opacity(0.6))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: Live HUD
@@ -129,7 +148,7 @@ struct DepthNetsView: View {
                 }
                 HStack(spacing: 12) {
                     Button {
-                        tracker.captureGroundDirection()
+                        tracker.captureGroundDirection(offsetDegrees: app.groundOffsetDeg)
                     } label: {
                         Label(tracker.hasGroundDirection ? "Re-aim" : "Set direction",
                               systemImage: "location.north.line.fill")
@@ -144,11 +163,18 @@ struct DepthNetsView: View {
                 }
             } else {
                 ModePicker(mode: $mode)
+                placementSummary
                 Button(action: start) {
                     Label("Start 3D tracking", systemImage: "cube.transparent")
                         .frame(maxWidth: .infinity).font(.headline)
                 }
                 .buttonStyle(.borderedProminent).tint(.green).controlSize(.large)
+                .disabled(!tracker.isSupported)
+
+                Button { showTesting = true } label: {
+                    Label("3D testing mode", systemImage: "scope").font(.caption)
+                }
+                .tint(.white)
                 .disabled(!tracker.isSupported)
             }
         }
