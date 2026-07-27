@@ -183,6 +183,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					4DB0C2D2C01CABAAA78AB412 = {
+						DevelopmentTeam = 6W6R7FTLUS;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -284,6 +285,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6W6R7FTLUS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -326,6 +328,7 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6W6R7FTLUS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

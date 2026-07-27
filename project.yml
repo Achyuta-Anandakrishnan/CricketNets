@@ -19,6 +19,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        # Kept here rather than only in the generated .xcodeproj, which `xcodegen generate` rewrites.
+        DEVELOPMENT_TEAM: 6W6R7FTLUS
         INFOPLIST_KEY_NSCameraUsageDescription: "Track the ball during net practice."
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
