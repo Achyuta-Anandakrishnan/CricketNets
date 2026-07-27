@@ -16,6 +16,7 @@ struct DepthNetsView: View {
     @State private var showTesting = false
     @State private var showBallTracker = false
     @State private var showAccuracy = false
+    @State private var showCapabilities = false
 
     var body: some View {
         ZStack {
@@ -57,6 +58,8 @@ struct DepthNetsView: View {
             AccuracyTestView().environmentObject(app)
         }
         .onChange(of: showAccuracy) { _, shown in if shown { tracker.stop() } }
+        // Read-only probe — no camera, so it doesn't need to take the session.
+        .sheet(isPresented: $showCapabilities) { CapabilitiesView() }
     }
 
     /// Where the phone is standing, settable before starting — the fine-tuning lives in testing mode.
@@ -200,6 +203,11 @@ struct DepthNetsView: View {
                     }
                     .tint(.green)
                     .disabled(!tracker.isSupported)
+
+                    Button { showCapabilities = true } label: {
+                        Label("Limits", systemImage: "speedometer").font(.caption)
+                    }
+                    .tint(.orange)
                 }
             }
         }
