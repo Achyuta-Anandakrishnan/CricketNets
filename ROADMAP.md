@@ -61,6 +61,7 @@ The app works end-to-end but is buggy on device. Priorities, in order:
 | Tracking picks up non-ball motion | High | Motion mask + gates; **Testing mode** added to see + tune live |
 | Filters too strict (real shots rejected) | High | Defaults loosened (motion 0.06, conf 0.5, len 6); tune in Testing mode |
 | Azimuth (left/right) unmeasurable from one 2D camera | Medium | Fixed the fake value (was pinned to ±45°); 2D now reports 0, and **3D mode measures it for real** |
-| LiDAR may not resolve a ball at net range | High | Unproven — nearest-confident-depth sampling + a resolve-rate readout to make it visible on device |
+| LiDAR may not resolve a ball at net range | High | Unproven — ball-sized depth patch + a resolve-rate readout to make it visible on device |
+| Colour gate rejected everything in 3D mode | High | Fixed: ARKit delivers bi-planar YCbCr, not BGRA, so the sampler was reading out of bounds and returning grey. `BallColor` now handles both formats |
 | Speed uncalibrated until Depth/reference set | Medium | Working as intended; calibrate to fix |
 | `xcodebuild` CLI broken in this env (Xcode components) | Low | No longer reproducing — CLI build + `test` both succeed against an iPhone 16 Pro simulator |

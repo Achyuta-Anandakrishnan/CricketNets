@@ -19,6 +19,7 @@ struct DepthTestingView: View {
 
     @State private var minMotion = 0.03
     @State private var minConf = 0.3
+    @State private var colorGate = true
 
     var body: some View {
         ZStack {
@@ -93,6 +94,7 @@ struct DepthTestingView: View {
                 }
                 Text("\(tracker.samples.count) samples this shot")
                     .font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                gateTally
             }
             .padding(10)
             .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
@@ -110,6 +112,22 @@ struct DepthTestingView: View {
         }
     }
 
+    /// Which gate is eating the detections. If `candidates` climbs but `accepted` stays at zero,
+    /// the number next to it names the culprit immediately.
+    private var gateTally: some View {
+        let g = tracker.gates
+        return VStack(alignment: .leading, spacing: 1) {
+            Text("\(g.candidates) candidates → \(g.accepted) passed")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(g.accepted > 0 ? .green : .orange)
+            if g.candidates > 0 && g.accepted == 0 {
+                Text("dropped: motion \(g.tooLittleMotion) · colour \(g.wrongColor) · conf \(g.lowConfidence)")
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.orange.opacity(0.9))
+            }
+        }
+    }
+
     // MARK: Panel
 
     private var panel: some View {
@@ -118,7 +136,21 @@ struct DepthTestingView: View {
             Divider().overlay(.white.opacity(0.2))
             slider("Min motion", $minMotion, 0...0.30) { tracker.setMinTrajectoryMotion($0) }
             slider("Min confidence", $minConf, 0...1) { tracker.setMinConfidence(Float($0)) }
-            Text("Green circle = the depth patch, drawn at the size it actually sampled. If it isn't on the ball, the distance is wrong.")
+
+            HStack(spacing: 16) {
+                Toggle("Colour gate", isOn: $colorGate)
+                    .onChange(of: colorGate) { _, v in
+                        tracker.setColorGateEnabled(v)
+                        tracker.resetCounters()
+                    }
+                    .font(.caption).tint(.green).foregroundStyle(.white)
+                Button("Reset counts") { tracker.resetCounters() }
+                    .font(.caption2).buttonStyle(.bordered).tint(.white)
+            }
+
+            Text(app.isBallCalibrated
+                 ? "Green circle = the depth patch at the size it actually sampled. If detections only appear with the colour gate off, the ball profile is the problem."
+                 : "No ball calibrated, so the colour gate is inactive — everything that moves is a candidate.")
                 .font(.caption2).foregroundStyle(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -211,5 +243,6 @@ struct DepthTestingView: View {
     private func pushParams() {
         tracker.setMinTrajectoryMotion(minMotion)
         tracker.setMinConfidence(Float(minConf))
+        tracker.setColorGateEnabled(colorGate)
     }
 }

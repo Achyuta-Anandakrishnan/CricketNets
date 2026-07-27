@@ -42,14 +42,39 @@ struct BallProfile: Equatable, Codable {
     var displayRGB: (Double, Double, Double) { BallColor.hsvToRGB(hue, saturation, brightness) }
 }
 
-/// Color sampling from a BGRA `CVPixelBuffer` (the format the capture output delivers).
+/// Color sampling from a `CVPixelBuffer`.
+///
+/// Two pixel formats reach this code and they are not interchangeable:
+/// - **BGRA**, which `CameraController` explicitly requests for the fast 2D path.
+/// - **Bi-planar YCbCr**, which is what ARKit hands out in `ARFrame.capturedImage` — it cannot be
+///   configured, so the 3D path has no choice about it.
+///
+/// Treating the second as the first is not a near miss. A bi-planar buffer's `CVPixelBufferGetBaseAddress`
+/// returns a non-null pointer to planar *metadata* rather than pixels, so a BGRA reader sails past the
+/// nil check and then strides `x * 4` through a row that doesn't exist — reading well out of bounds and
+/// returning noise. Every trajectory then fails the color gate and the 3D path silently tracks nothing.
 enum BallColor {
 
-    /// Average RGB (0...1) over a square patch centered on a pixel.
+    /// Average RGB (0...1) over a square patch centered on a pixel, whatever the buffer's format.
     static func averageRGB(_ buffer: CVPixelBuffer, cx: Int, cy: Int, r: Int) -> (Double, Double, Double)? {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+
+        switch CVPixelBufferGetPixelFormatType(buffer) {
+        case kCVPixelFormatType_32BGRA:
+            return averageBGRA(buffer, cx: cx, cy: cy, r: r)
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
+            return averageYCbCr(buffer, cx: cx, cy: cy, r: r, videoRange: false)
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+            return averageYCbCr(buffer, cx: cx, cy: cy, r: r, videoRange: true)
+        default:
+            return nil   // better no reading than a confidently wrong one
+        }
+    }
+
+    /// Packed 8-bit BGRA, one plane.
+    private static func averageBGRA(_ buffer: CVPixelBuffer, cx: Int, cy: Int, r: Int) -> (Double, Double, Double)? {
+        guard !CVPixelBufferIsPlanar(buffer), let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
         let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
         let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
         let ptr = base.assumingMemoryBound(to: UInt8.self)
@@ -72,6 +97,60 @@ enum BallColor {
         }
         guard n > 0 else { return nil }
         return (rs / n / 255, gs / n / 255, bs / n / 255)
+    }
+
+    /// Bi-planar YCbCr 4:2:0 — plane 0 is full-resolution luma, plane 1 is half-resolution
+    /// interleaved chroma, so each 2x2 block of luma shares one Cb/Cr pair.
+    private static func averageYCbCr(_ buffer: CVPixelBuffer, cx: Int, cy: Int, r: Int,
+                                     videoRange: Bool) -> (Double, Double, Double)? {
+        guard CVPixelBufferGetPlaneCount(buffer) >= 2,
+              let lumaBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 0),
+              let chromaBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 1)
+        else { return nil }
+
+        let w = CVPixelBufferGetWidthOfPlane(buffer, 0)
+        let h = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let lumaRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let chromaW = CVPixelBufferGetWidthOfPlane(buffer, 1)
+        let chromaH = CVPixelBufferGetHeightOfPlane(buffer, 1)
+        let chromaRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1)
+
+        let luma = lumaBase.assumingMemoryBound(to: UInt8.self)
+        let chroma = chromaBase.assumingMemoryBound(to: UInt8.self)
+
+        let x0 = max(0, cx - r), x1 = min(w - 1, cx + r)
+        let y0 = max(0, cy - r), y1 = min(h - 1, cy + r)
+        guard x0 <= x1, y0 <= y1 else { return nil }
+
+        var rs = 0.0, gs = 0.0, bs = 0.0, n = 0.0
+        var y = y0
+        while y <= y1 {
+            let cRow = min(y / 2, chromaH - 1) * chromaRow
+            var x = x0
+            while x <= x1 {
+                var yy = Double(luma[y * lumaRow + x])
+                let cIndex = cRow + min(x / 2, chromaW - 1) * 2
+                var cb = Double(chroma[cIndex]) - 128
+                var cr = Double(chroma[cIndex + 1]) - 128
+
+                // Video-range packs luma into 16...235 and chroma into 16...240; stretch to full.
+                if videoRange {
+                    yy = (yy - 16) * 255 / 219
+                    cb *= 255 / 224
+                    cr *= 255 / 224
+                }
+
+                // BT.601, the matrix these 4:2:0 camera formats are encoded with.
+                rs += yy + 1.402 * cr
+                gs += yy - 0.344136 * cb - 0.714136 * cr
+                bs += yy + 1.772 * cb
+                n += 1; x += 1
+            }
+            y += 1
+        }
+        guard n > 0 else { return nil }
+        func clamp(_ v: Double) -> Double { min(max(v / n / 255, 0), 1) }
+        return (clamp(rs), clamp(gs), clamp(bs))
     }
 
     /// Sample HSV at a Vision-normalized point (origin bottom-left) — used to color-check a detection.

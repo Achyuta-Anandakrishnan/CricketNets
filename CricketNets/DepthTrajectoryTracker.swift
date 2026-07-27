@@ -22,6 +22,23 @@ import simd
 /// **Device only** — ARKit scene depth does not exist in the Simulator.
 final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
+    /// Running tally of what the gates did to the candidate trajectories Vision offered.
+    struct GateCounts: Equatable {
+        var candidates = 0
+        var tooLittleMotion = 0
+        var lowConfidence = 0
+        var wrongColor = 0
+        var accepted = 0
+
+        mutating func add(_ other: GateCounts) {
+            candidates += other.candidates
+            tooLittleMotion += other.tooLittleMotion
+            lowConfidence += other.lowConfidence
+            wrongColor += other.wrongColor
+            accepted += other.accepted
+        }
+    }
+
     /// How well LiDAR is reading the ball right now — surfaced so the user can fix their setup
     /// (get closer, better light) instead of wondering why nothing scores.
     enum DepthQuality: String {
@@ -48,6 +65,9 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     /// immediate feedback while the phone placement is being adjusted, without waiting for a shot
     /// to finish and score.
     @Published private(set) var liveAzimuthDeg: Double?
+    /// Cumulative gate tally since tracking started — the fastest way to see which filter is the
+    /// one rejecting everything.
+    @Published private(set) var gates = GateCounts()
     /// Frames seen vs frames that produced a usable 3D point — the honest hit rate of this path.
     @Published private(set) var framesSeen = 0
     @Published private(set) var pointsResolved = 0
@@ -95,6 +115,7 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     private var minTrajectoryMotion: Double = 0.03
     private var minConfidence: Float = 0.3
     private var ballProfile: BallProfile?
+    private var colorGateEnabled = true
 
     /// LiDAR's usable envelope. Beyond ~5 m readings collapse to zero or noise.
     private static let minUsefulDepth: Float = 0.3
@@ -114,6 +135,16 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
     func setMinTrajectoryMotion(_ v: Double) { arQueue.async { [weak self] in self?.minTrajectoryMotion = v } }
     func setMinConfidence(_ v: Float) { arQueue.async { [weak self] in self?.minConfidence = v } }
+
+    /// Turn the color gate off to isolate it — if detections appear the moment it's disabled, the
+    /// ball profile is the problem, not the detector.
+    func setColorGateEnabled(_ on: Bool) { arQueue.async { [weak self] in self?.colorGateEnabled = on } }
+
+    func resetCounters() {
+        gates = GateCounts()
+        framesSeen = 0
+        pointsResolved = 0
+    }
 
     // MARK: Lifecycle
 
@@ -246,17 +277,29 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
     }
 
     /// The highest-confidence trajectory clearing the motion, confidence and color gates — the same
-    /// three the fast path applies.
+    /// three the fast path applies. Tallies why each candidate was dropped, so a gate that is
+    /// silently eating every detection shows up as a number rather than as "nothing happens".
     private func bestObservation(in observations: [VNTrajectoryObservation],
                                  colorSource: CVPixelBuffer) -> VNTrajectoryObservation? {
         var best: VNTrajectoryObservation?
+        var counts = GateCounts()
         for obs in observations {
-            guard TrajectoryDetector.pathLength(obs.detectedPoints) >= minTrajectoryMotion else { continue }
-            guard obs.confidence > minConfidence else { continue }
-            if let ballProfile,
-               TrajectoryDetector.colorFraction(of: obs, in: colorSource, profile: ballProfile) < 0.7 { continue }
+            counts.candidates += 1
+            guard TrajectoryDetector.pathLength(obs.detectedPoints) >= minTrajectoryMotion else {
+                counts.tooLittleMotion += 1; continue
+            }
+            guard obs.confidence > minConfidence else {
+                counts.lowConfidence += 1; continue
+            }
+            if colorGateEnabled, let ballProfile,
+               TrajectoryDetector.colorFraction(of: obs, in: colorSource, profile: ballProfile) < 0.7 {
+                counts.wrongColor += 1; continue
+            }
+            counts.accepted += 1
             if best == nil || obs.confidence > best!.confidence { best = obs }
         }
+        let tally = counts
+        DispatchQueue.main.async { [weak self] in self?.gates.add(tally) }
         return best
     }
 
