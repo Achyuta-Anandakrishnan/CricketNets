@@ -89,6 +89,76 @@ enum BallPhysics {
                             height: Double(samples[0].position.y))
     }
 
+    /// Measure gravity from a tracked ball, as an end-to-end accuracy check.
+    ///
+    /// This is the only ground truth available without instrumenting the net: a falling ball
+    /// accelerates downward at 9.81 m/s², always, and every stage of the pipeline has to be right
+    /// for that number to come out. Detection has to find the real ball, depth has to be the ball's
+    /// distance and not the background, the unprojection has to be correctly scaled, and the frame
+    /// timestamps have to be real. Get any of those wrong and this reads something other than 9.81 —
+    /// and *how* wrong is diagnostic:
+    ///
+    /// - roughly half or double → a scale error, usually depth
+    /// - near zero → the ball isn't really being tracked, or depth is pinned to a static background
+    /// - wildly noisy between drops → detection is jumping between objects
+    ///
+    /// Returns the downward acceleration in m/s² (positive = falling), or nil if the samples can't
+    /// support a fit.
+    static func measuredGravity(worldSamples samples: [WorldSample]) -> Double? {
+        guard samples.count >= 4 else { return nil }
+        let t0 = samples[0].time
+        let times = samples.map { $0.time - t0 }
+        guard let last = times.last, last > 0 else { return nil }
+        guard let fit = quadraticFit(times: times, values: samples.map { Double($0.position.y) })
+        else { return nil }
+        return -fit.acceleration   // world y is up, so falling is negative acceleration
+    }
+
+    /// Least-squares fit of `y = a + b·t + ½c·t²`, returning the initial rate `b` and acceleration `c`.
+    ///
+    /// The linear fit elsewhere assumes gravity's value; this one measures it, which is the whole
+    /// point when the question is whether the pipeline is trustworthy.
+    static func quadraticFit(times: [Double], values: [Double]) -> (rate: Double, acceleration: Double)? {
+        let n = Double(times.count)
+        guard times.count >= 3, times.count == values.count else { return nil }
+
+        var s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0
+        var sy = 0.0, sty = 0.0, st2y = 0.0
+        for (t, y) in zip(times, values) {
+            let t2 = t * t
+            s1 += t; s2 += t2; s3 += t2 * t; s4 += t2 * t2
+            sy += y; sty += t * y; st2y += t2 * y
+        }
+
+        // Normal equations for [a, b, c'] where the model is a + b·t + c'·t², so acceleration = 2c'.
+        let m = [[n, s1, s2],
+                 [s1, s2, s3],
+                 [s2, s3, s4]]
+        let rhs = [sy, sty, st2y]
+
+        guard let solution = solve3x3(m, rhs) else { return nil }
+        return (rate: solution[1], acceleration: 2 * solution[2])
+    }
+
+    /// Cramer's rule. Fine at this size, and avoids pulling in a linear-algebra dependency.
+    private static func solve3x3(_ m: [[Double]], _ rhs: [Double]) -> [Double]? {
+        func det(_ a: [[Double]]) -> Double {
+            a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+          - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+          + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+        }
+        let d = det(m)
+        // Samples spread over too little time make the system near-singular; refuse rather than
+        // return an enormous meaningless acceleration.
+        guard abs(d) > 1e-12 else { return nil }
+
+        return (0..<3).map { col in
+            var c = m
+            for row in 0..<3 { c[row][col] = rhs[row] }
+            return det(c) / d
+        }
+    }
+
     /// Least-squares linear fit of `values` against `times`.
     ///
     /// For a coordinate following p(t) = p₀ + v₀·t − ½a·t², the least-squares slope across the

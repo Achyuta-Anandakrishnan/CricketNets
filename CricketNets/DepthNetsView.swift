@@ -15,6 +15,7 @@ struct DepthNetsView: View {
     @State private var running = false
     @State private var showTesting = false
     @State private var showBallTracker = false
+    @State private var showAccuracy = false
 
     var body: some View {
         ZStack {
@@ -52,6 +53,10 @@ struct DepthNetsView: View {
             BallTrackerView().environmentObject(app)
         }
         .onChange(of: showBallTracker) { _, shown in if shown { tracker.stop() } }
+        .fullScreenCover(isPresented: $showAccuracy, onDismiss: { if running { tracker.start() } }) {
+            AccuracyTestView().environmentObject(app)
+        }
+        .onChange(of: showAccuracy) { _, shown in if shown { tracker.stop() } }
     }
 
     /// Where the phone is standing, settable before starting — the fine-tuning lives in testing mode.
@@ -188,6 +193,12 @@ struct DepthNetsView: View {
                         Label("3D testing", systemImage: "scope").font(.caption)
                     }
                     .tint(.white)
+                    .disabled(!tracker.isSupported)
+
+                    Button { showAccuracy = true } label: {
+                        Label("Accuracy", systemImage: "checkmark.seal").font(.caption)
+                    }
+                    .tint(.green)
                     .disabled(!tracker.isSupported)
                 }
             }

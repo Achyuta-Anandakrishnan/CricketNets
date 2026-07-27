@@ -4,6 +4,14 @@ options:
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
+# Project-wide so BOTH targets get them. The test bundle needs signing too, or running tests on a
+# real device fails even though the app itself builds fine.
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    # Kept here rather than only in the generated .xcodeproj, which `xcodegen generate` rewrites.
+    DEVELOPMENT_TEAM: 6W6R7FTLUS
 targets:
   CricketNets:
     type: application
@@ -17,12 +25,8 @@ targets:
         # Bump MARKETING_VERSION per release, CURRENT_PROJECT_VERSION per build you install.
         # Both are shown on the Nets idle screen so you can confirm what's actually on the phone.
         MARKETING_VERSION: "0.4"
-        CURRENT_PROJECT_VERSION: "7"
+        CURRENT_PROJECT_VERSION: "8"
         TARGETED_DEVICE_FAMILY: "1,2"
-        SWIFT_VERSION: "5.0"
-        CODE_SIGN_STYLE: Automatic
-        # Kept here rather than only in the generated .xcodeproj, which `xcodegen generate` rewrites.
-        DEVELOPMENT_TEAM: 6W6R7FTLUS
         INFOPLIST_KEY_NSCameraUsageDescription: "Track the ball during net practice."
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -38,7 +42,6 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.example.CricketNetsTests
-        SWIFT_VERSION: "5.0"
 schemes:
   CricketNets:
     build:
