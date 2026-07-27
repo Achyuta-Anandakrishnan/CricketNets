@@ -1,3 +1,4 @@
+import Foundation
 import Vision
 import CoreMedia
 import CoreGraphics
@@ -26,55 +27,95 @@ struct DebugTrajectory: Identifiable {
 /// frames must carry increasing presentation timestamps (the sample buffers do).
 final class TrajectoryDetector {
 
-    /// Calibration for turning image motion into real speed. Milestone 2 will derive this
-    /// from a known reference (stump width = 0.2286 m) or LiDAR. For now it's a hand-tuned guess.
+    /// Calibration for turning image motion into real speed, written by `AppState` on the main
+    /// thread and read by the detector on its own queue — hence the lock.
     enum Calibration {
+        private static let lock = NSLock()
+        private static var _metersPerNormalizedUnit: Double = 3.0
+        private static var _fps: Double = 120
+
         /// How many meters one full normalized unit (frame width) spans at the ball's plane.
-        /// Placeholder: assumes the tracked plane is ~3 m wide in view. Tune against a known distance.
-        static var metersPerNormalizedUnit: Double = 3.0
+        /// Default assumes the tracked plane is ~3 m wide in view; a real calibration replaces it.
+        static var metersPerNormalizedUnit: Double {
+            get { lock.lock(); defer { lock.unlock() }; return _metersPerNormalizedUnit }
+            set { lock.lock(); _metersPerNormalizedUnit = newValue; lock.unlock() }
+        }
         /// Capture frame rate; used to convert per-frame motion into per-second speed.
-        static var fps: Double = 120
+        static var fps: Double {
+            get { lock.lock(); defer { lock.unlock() }; return _fps }
+            set { lock.lock(); _fps = newValue; lock.unlock() }
+        }
     }
 
-    /// A real shot streaks across the frame; noise barely moves. Trajectories whose points span
-    /// less than this (fraction of the frame) are rejected. Kept low so real shots aren't lost.
-    var minTrajectoryMotion: Double = 0.03
+    /// Size gate used before a ball has been calibrated: generous, so a small far ball still counts.
+    private static let defaultMinRadius: Float = 0.003
+    private static let defaultMaxRadius: Float = 0.20
 
-    /// Minimum confidence Vision must report for a trajectory to be considered.
-    var minConfidence: Float = 0.3
-
-    /// Toggle the color gate independently of whether a ball is calibrated (for the Testing screen).
-    var colorGateEnabled = true
-
-    /// EXPERIMENTAL and OFF by default: feeding a difference-image to Vision can suppress detection
-    /// entirely, so we track the raw frame. Toggle on in Testing mode only to compare.
-    var useMotionMask = false
-
-    /// When true, `process` also reports every candidate + its verdict for the Testing overlay.
-    var debugMode = false
-
-    private lazy var request: VNDetectTrajectoriesRequest = {
-        // Short length so fast shots register (they're only in view for a few frames); a generous
-        // size range so a small, far ball still counts. These are set once — the request is stateful.
-        let req = VNDetectTrajectoriesRequest(frameAnalysisSpacing: .zero,
-                                              trajectoryLength: 5)
-        req.objectMinimumNormalizedRadius = 0.003
-        req.objectMaximumNormalizedRadius = 0.20
-        return req
-    }()
+    /// Every tuning knob below is written from the UI (main thread) and read while processing a
+    /// frame (vision queue), so all of them live behind `visionQueue` and are set via `configure`.
+    private var minTrajectoryMotion: Double = 0.03
+    private var minConfidence: Float = 0.3
+    private var colorGateEnabled = true
+    private var useMotionMask = false
+    private var debugMode = false
+    private var ballProfile: BallProfile?
 
     /// Serialize Vision calls; the stateful request is not thread-safe across frames.
     private let visionQueue = DispatchQueue(label: "cricketnets.vision")
 
-    /// When set (via ball calibration), trajectories whose blob isn't the ball's color are rejected.
-    /// This is what stops the tracker from locking onto hands, the bat, or people in the background.
-    var ballProfile: BallProfile?
+    private lazy var request: VNDetectTrajectoriesRequest = {
+        // Short length so fast shots register — they're only in view for a few frames.
+        let req = VNDetectTrajectoriesRequest(frameAnalysisSpacing: .zero,
+                                              trajectoryLength: 5)
+        req.objectMinimumNormalizedRadius = Self.defaultMinRadius
+        req.objectMaximumNormalizedRadius = Self.defaultMaxRadius
+        return req
+    }()
 
     private let masker = MotionMasker()
 
+    // MARK: Configuration (safe to call from any thread)
+
+    /// Apply a tuning change on the vision queue. Everything the per-frame path reads goes through
+    /// here, so the UI can turn knobs mid-session without racing a frame being processed.
+    private func configure(_ change: @escaping (TrajectoryDetector) -> Void) {
+        visionQueue.async { [weak self] in
+            guard let self else { return }
+            change(self)
+        }
+    }
+
+    /// A real shot streaks across the frame; noise barely moves. Trajectories spanning less than
+    /// this (fraction of the frame) are rejected. Kept low so real shots aren't lost.
+    func setMinTrajectoryMotion(_ v: Double) { configure { $0.minTrajectoryMotion = v } }
+
+    /// Minimum confidence Vision must report for a trajectory to be considered.
+    func setMinConfidence(_ v: Float) { configure { $0.minConfidence = v } }
+
+    /// Toggle the color gate independently of whether a ball is calibrated (for the Testing screen).
+    func setColorGateEnabled(_ on: Bool) { configure { $0.colorGateEnabled = on } }
+
+    /// EXPERIMENTAL and OFF by default: feeding a difference-image to Vision can suppress detection
+    /// entirely, so we track the raw frame. Toggle on in Testing mode only to compare.
+    func setUseMotionMask(_ on: Bool) { configure { $0.useMotionMask = on } }
+
+    /// When true, `process` also reports every candidate + its verdict for the Testing overlay.
+    func setDebugMode(_ on: Bool) { configure { $0.debugMode = on } }
+
+    /// Set (via ball calibration) so trajectories whose blob isn't the ball's color are rejected.
+    /// This is what stops the tracker locking onto hands, the bat, or people in the background.
+    /// The profile also narrows the request's size gate to the ball's apparent radius.
+    func setBallProfile(_ profile: BallProfile?) {
+        configure {
+            $0.ballProfile = profile
+            $0.request.objectMinimumNormalizedRadius = Float(profile?.minRadius ?? Double(Self.defaultMinRadius))
+            $0.request.objectMaximumNormalizedRadius = Float(profile?.maxRadius ?? Double(Self.defaultMaxRadius))
+        }
+    }
+
     /// Clear the motion history when tracking (re)starts. Runs on the vision queue to avoid racing
     /// the per-frame masking.
-    func resetMotion() { visionQueue.async { [weak self] in self?.masker.reset() } }
+    func resetMotion() { configure { $0.masker.reset() } }
 
     func process(_ sampleBuffer: CMSampleBuffer,
                  completion: @escaping (TrajectoryResult?, [DebugTrajectory]) -> Void) {

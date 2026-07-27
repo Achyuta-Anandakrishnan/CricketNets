@@ -17,6 +17,7 @@
 		2C427514896CAEFF99FF5713 /* FieldAndStatsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FE8B3BCD9966FEF40CBC269 /* FieldAndStatsTests.swift */; };
 		4E0EA6F1D671E7D5196C553A /* ScoringEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C56FFB2AA2C00E453BBCA227 /* ScoringEngine.swift */; };
 		5FC650490DD476F95B3B7648 /* FieldView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64F48D56F237F5DB7CF5601 /* FieldView.swift */; };
+		730F5CCEBBD8A3A504E7F51A /* BallPhysicsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A0FFFB5A48EDAE9565B714 /* BallPhysicsTests.swift */; };
 		781F1C1056DB6FF910F0C6A3 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F34FCF088DD4EFF783643D2 /* StatsView.swift */; };
 		7B2941E158A16B9C493F4D0F /* ScoringEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8AECEC6AA06F0392FD24368 /* ScoringEngineTests.swift */; };
 		82CCD0BCDBBEB5FB6EA51442 /* CricketNetsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE325507F5BA9D8C766ED828 /* CricketNetsApp.swift */; };
@@ -52,6 +53,7 @@
 		A10E2AD0811D1E4FFEC3A2DC /* BallCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallCalibrationView.swift; sourceTree = "<group>"; };
 		B0226C2E3E369932FCFC2B3C /* MotionMasker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionMasker.swift; sourceTree = "<group>"; };
 		B18BCF6249A8C5F22F05CB2D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		B7A0FFFB5A48EDAE9565B714 /* BallPhysicsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallPhysicsTests.swift; sourceTree = "<group>"; };
 		B91FA7BDFE3A901BE7F8CF21 /* BallProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallProfileTests.swift; sourceTree = "<group>"; };
 		C56FFB2AA2C00E453BBCA227 /* ScoringEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoringEngine.swift; sourceTree = "<group>"; };
 		C8AECEC6AA06F0392FD24368 /* ScoringEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoringEngineTests.swift; sourceTree = "<group>"; };
@@ -92,6 +94,7 @@
 		60E04AA812D59408232FC23A /* CricketNetsTests */ = {
 			isa = PBXGroup;
 			children = (
+				B7A0FFFB5A48EDAE9565B714 /* BallPhysicsTests.swift */,
 				B91FA7BDFE3A901BE7F8CF21 /* BallProfileTests.swift */,
 				6FE8B3BCD9966FEF40CBC269 /* FieldAndStatsTests.swift */,
 				C8AECEC6AA06F0392FD24368 /* ScoringEngineTests.swift */,
@@ -194,6 +197,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				730F5CCEBBD8A3A504E7F51A /* BallPhysicsTests.swift in Sources */,
 				9898FDBFFA5902591ECDBB9E /* BallProfileTests.swift in Sources */,
 				2C427514896CAEFF99FF5713 /* FieldAndStatsTests.swift in Sources */,
 				7B2941E158A16B9C493F4D0F /* ScoringEngineTests.swift in Sources */,

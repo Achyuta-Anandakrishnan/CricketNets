@@ -53,7 +53,9 @@ tab and calibration need the physical device.
   where you put fielders. That's the product promise, and it's real.
 
 ## Known limitations (by design or pending)
-- Left/right **azimuth from a single 2D camera is approximate**; true 3D needs the LiDAR path.
+- Left/right **azimuth is not measured from a single 2D camera** — camera-tracked shots are scored as
+  straight down the ground until the LiDAR 3D path lands. The wagon wheel is therefore only as wide as
+  the Field tab's manual shots for now.
 - Scoring is an **estimate** extrapolated from a short net trajectory.
 - **Ball tracking accuracy is the biggest open risk** and the thing most in need of real-device testing.
 - See `ROADMAP.md` for the current stability issues and plan.

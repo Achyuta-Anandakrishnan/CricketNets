@@ -55,6 +55,6 @@ The app works end-to-end but is buggy on device. Priorities, in order:
 | Freeze when opening a calibration screen | High | Depth camera conflict fixed; ball calibration runs its own short-lived session |
 | Tracking picks up non-ball motion | High | Motion mask + gates; **Testing mode** added to see + tune live |
 | Filters too strict (real shots rejected) | High | Defaults loosened (motion 0.06, conf 0.5, len 6); tune in Testing mode |
-| Azimuth (left/right) only approximate in 2D | Medium | Planned: LiDAR 3D path |
+| Azimuth (left/right) unmeasurable from one 2D camera | Medium | Fixed the fake value (was pinned to ±45°); now reported as 0. Real fix: LiDAR 3D path |
 | Speed uncalibrated until Depth/reference set | Medium | Working as intended; calibrate to fix |
-| `xcodebuild` CLI broken in this env (Xcode components) | Low | Use Xcode GUI; run `xcodebuild -runFirstLaunch` |
+| `xcodebuild` CLI broken in this env (Xcode components) | Low | No longer reproducing — CLI build + `test` both succeed against an iPhone 16 Pro simulator |

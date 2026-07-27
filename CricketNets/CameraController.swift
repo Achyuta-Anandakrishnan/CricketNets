@@ -41,22 +41,34 @@ final class CameraController: NSObject, ObservableObject {
     private let cooldownSeconds = 10
     private var cooldownTimer: Timer?
 
+    /// Cooldown state as seen by the capture queue. `cooldownRemaining` is `@Published` and so may
+    /// only be touched on the main thread; `captureOutput` runs on the session queue and needs the
+    /// same answer, so it reads this lock-guarded mirror instead.
+    private let cooldownLock = NSLock()
+    private var _isCoolingDown = false
+    private var isCoolingDown: Bool {
+        get { cooldownLock.lock(); defer { cooldownLock.unlock() }; return _isCoolingDown }
+        set { cooldownLock.lock(); _isCoolingDown = newValue; cooldownLock.unlock() }
+    }
+
     /// The ball's color profile. Forwarded to the detector so only ball-colored trajectories count.
     var ballProfile: BallProfile? {
-        didSet { detector.ballProfile = ballProfile }
+        didSet { detector.setBallProfile(ballProfile) }
     }
 
     // MARK: Testing-mode passthroughs
     /// All candidate trajectories + verdicts from the last processed frame (only in debug mode).
     @Published var debugTrajectories: [DebugTrajectory] = []
 
-    func setDebugMode(_ on: Bool) { detector.debugMode = on }
-    func setMinMotion(_ v: Double) { detector.minTrajectoryMotion = v }
-    func setMinConfidence(_ v: Double) { detector.minConfidence = Float(v) }
-    func setMotionMask(_ on: Bool) { detector.useMotionMask = on; detector.resetMotion() }
-    func setColorGate(_ on: Bool) { detector.colorGateEnabled = on }
-    var minMotion: Double { detector.minTrajectoryMotion }
-    var minConfidence: Double { Double(detector.minConfidence) }
+    /// Main-thread copy of the detector's debug flag, so publishing the overlay doesn't have to
+    /// reach into the detector's queue-confined state.
+    private var debugModeEnabled = false
+
+    func setDebugMode(_ on: Bool) { debugModeEnabled = on; detector.setDebugMode(on) }
+    func setMinMotion(_ v: Double) { detector.setMinTrajectoryMotion(v) }
+    func setMinConfidence(_ v: Double) { detector.setMinConfidence(Float(v)) }
+    func setMotionMask(_ on: Bool) { detector.setUseMotionMask(on); detector.resetMotion() }
+    func setColorGate(_ on: Bool) { detector.setColorGateEnabled(on) }
 
     /// Most recent frame, kept so the ball-calibration screen can sample the ball's color.
     private let bufferLock = NSLock()
@@ -91,6 +103,7 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func stop() {
+        isCoolingDown = false
         DispatchQueue.main.async { [weak self] in
             self?.cooldownTimer?.invalidate()
             self?.cooldownTimer = nil
@@ -204,6 +217,7 @@ final class CameraController: NSObject, ObservableObject {
         cooldownTimer?.invalidate()
         cooldownTimer = nil
         cooldownRemaining = 0
+        isCoolingDown = false
         detector.resetMotion()
     }
 
@@ -213,12 +227,14 @@ final class CameraController: NSObject, ObservableObject {
         trajectoryPoints = []
         hasTrajectory = false
         cooldownRemaining = cooldownSeconds
+        isCoolingDown = true
         cooldownTimer?.invalidate()
         cooldownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             cooldownRemaining -= 1
             if cooldownRemaining <= 0 {
                 cooldownRemaining = 0
+                isCoolingDown = false
                 cooldownTimer?.invalidate()
                 cooldownTimer = nil
                 detector.resetMotion()   // start the next ball from a clean background
@@ -241,7 +257,7 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // During the post-shot cooldown, don't track — let the ball be retrieved in peace.
-        if cooldownRemaining > 0 { return }
+        if isCoolingDown { return }
 
         // Drop this frame if the previous one is still being processed (bounds memory + heat).
         flightLock.lock()
@@ -256,7 +272,7 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
             flightLock.unlock()
             DispatchQueue.main.async {
                 self.apply(result)
-                if self.detector.debugMode { self.debugTrajectories = debug }
+                if self.debugModeEnabled { self.debugTrajectories = debug }
             }
         }
     }

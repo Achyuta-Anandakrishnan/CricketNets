@@ -9,8 +9,8 @@ enum CricketConstants {
     static let stumpHeight = 0.7112
     /// Pitch length, popping crease to popping crease.
     static let pitchLength = 20.12
-    /// A regulation ball's diameter.
-    static let ballDiameter = 0.0072
+    /// A regulation ball's diameter. Circumference is 22.4–22.9 cm, so ~7.2 cm across.
+    static let ballDiameter = 0.072
 }
 
 /// Real-world scene geometry that turns image-space tracking into metric measurements.

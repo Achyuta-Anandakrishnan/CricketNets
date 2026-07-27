@@ -68,7 +68,8 @@ Two ways to calibrate:
 - **Reference (manual):** `SceneCalibration.fromReference(...)` — mark two stumps in the frame (`CricketConstants.wicketWidth`). Works on non-LiDAR phones too.
 
 ### Honest limits at this stage
-- **Azimuth from the 2D fast path is approximate** — a single 2D view can't fully separate a square hit from a straight one. Trustworthy left/right needs the **LiDAR 3D path** (`ShotAnalysis.from3D`). The 2D sign is still useful for "which side of the wicket."
+- **Azimuth is not measured on the 2D fast path — it is reported as 0 (straight).** A single side-on view genuinely cannot separate a square hit from a straight one: both trace the same path across the image, and the sign of the horizontal drift tells you which way *down the ground*, not which side of the wicket. The code no longer guesses. Real left/right needs the **LiDAR 3D path** (`ShotAnalysis.from3D`), which is still to be wired up.
+- **Speed from the 2D path is a lower bound** — it's the flight speed projected onto the image plane, so a ball hit toward or away from the camera reads slow. Elevation is directly observable and reliable.
 - **Physics ignores air drag/swing** — real carry is a bit shorter at high speed. Fine for scoring zones; note it to users.
 - **Verify the metric scale against a tape measure once** — the orientation reconciliation between the ARKit calibration pass (landscape) and the tracking pass (portrait) is the one number worth sanity-checking on device. Flagged in `LiDARCalibrator.makeCalibration`.
 
