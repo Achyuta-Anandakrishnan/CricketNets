@@ -179,6 +179,53 @@ struct StatusRow: View {
     }
 }
 
+// MARK: - Ball colour
+
+/// The colour the tracker is actually matching against.
+///
+/// Worth showing anywhere calibration matters: a swatch that plainly isn't your ball explains a
+/// failure instantly, where a "not found" message just leaves you guessing whether the problem is
+/// the colour, the light, or the detector.
+struct BallSwatch: View {
+    let profile: BallProfile?
+    var showValues = false
+    var size: CGFloat = 22
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let profile {
+                let rgb = profile.displayRGB
+                Circle()
+                    .fill(Color(red: rgb.0, green: rgb.1, blue: rgb.2))
+                    .frame(width: size, height: size)
+                    .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1))
+                if showValues {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("ball colour")
+                            .font(.system(size: 9)).foregroundStyle(.white.opacity(0.6))
+                        Text(String(format: "H%.2f S%.2f V%.2f",
+                                    profile.hue, profile.saturation, profile.brightness))
+                            .font(.system(size: 9).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text(String(format: "±%.2f ±%.2f ±%.2f",
+                                    profile.hueTol, profile.satTol, profile.valTol))
+                            .font(.system(size: 9).monospacedDigit())
+                            .foregroundStyle(.cyan.opacity(0.8))
+                    }
+                }
+            } else {
+                Circle()
+                    .strokeBorder(.white.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                    .frame(width: size, height: size)
+                if showValues {
+                    Text("no ball calibrated")
+                        .font(.system(size: 9)).foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Version
 
 /// What's actually installed, read from the built bundle.

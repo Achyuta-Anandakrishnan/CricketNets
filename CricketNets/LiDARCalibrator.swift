@@ -24,8 +24,13 @@ final class LiDARCalibrator: NSObject, ObservableObject, ARSessionDelegate {
     private var lastFocalX: Float = 0          // fx from camera intrinsics (captured-image pixels)
     private var lastImageWidth: Float = 0      // captured image width in pixels
 
+    private let captureID = UUID()
+
     func start() {
         guard isSupported else { return }
+        CaptureArbiter.shared.acquire(id: captureID, name: "Depth calibration") { [weak self] in
+            self?.stop()
+        }
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics.insert(.sceneDepth)
         session.delegate = self
@@ -36,6 +41,7 @@ final class LiDARCalibrator: NSObject, ObservableObject, ARSessionDelegate {
     func stop() {
         session.pause()
         isRunning = false
+        CaptureArbiter.shared.release(id: captureID)
     }
 
     /// Produce a calibration from the most recent LiDAR frame.

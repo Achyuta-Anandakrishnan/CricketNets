@@ -99,6 +99,9 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     // MARK: arQueue-confined state
 
     private let arQueue = DispatchQueue(label: "cricketnets.depth.ar")
+    private let captureID = UUID()
+    /// Distinguishes the live tracker from the testing screen's own instance in the arbiter.
+    var ownerName = "3D tracking"
 
     /// Vision's trajectory request is stateful, so one instance, touched only on `arQueue`.
     private lazy var request: VNDetectTrajectoriesRequest = {
@@ -148,8 +151,11 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
     // MARK: Lifecycle
 
+    @MainActor
     func start() {
         guard isSupported, !isRunning else { return }
+        // One camera owner at a time; overlapping sessions give a black preview and no error.
+        CaptureArbiter.shared.acquire(id: captureID, name: ownerName) { [weak self] in self?.stop() }
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics.insert(.sceneDepth)
         // Prefer the fastest video format ARKit offers — more frames means more 3D samples per shot.
@@ -165,12 +171,14 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
         pointsResolved = 0
     }
 
+    @MainActor
     func stop() {
         session.pause()
         isRunning = false
         isTracking = false
         settleWork?.cancel()
         samples = []
+        CaptureArbiter.shared.release(id: captureID)
     }
 
     /// Lock the current aim as the reference for azimuth, rotated by where the phone is standing.

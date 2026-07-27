@@ -205,10 +205,13 @@ struct FastNetsView: View {
 
     private var calibrationBar: some View {
         VStack(spacing: 8) {
-            StatusRow(ok: app.isBallCalibrated,
-                      text: app.isBallCalibrated ? "Tracking the ball only"
-                                                 : "Tracking everything — calibrate the ball",
-                      button: "Ball") { showBallCalibration = true }
+            HStack(spacing: 8) {
+                BallSwatch(profile: app.ballProfile, size: 16)
+                StatusRow(ok: app.isBallCalibrated,
+                          text: app.isBallCalibrated ? "Tracking the ball only"
+                                                     : "Tracking everything — calibrate the ball",
+                          button: "Ball") { showBallCalibration = true }
+            }
 
             StatusRow(ok: app.isCalibrated,
                       text: app.isCalibrated ? "Distance set (\(app.calibration.source.rawValue))"

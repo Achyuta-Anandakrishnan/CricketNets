@@ -91,7 +91,17 @@ final class CameraController: NSObject, ObservableObject {
 
     // MARK: Lifecycle
 
+    private let captureID = UUID()
+
     func start() {
+        // An ARSession elsewhere in the app would otherwise hold the back camera and this session
+        // would come up black with no error.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            CaptureArbiter.shared.acquire(id: captureID, name: "Fast 2D tracking") { [weak self] in
+                self?.stop()
+            }
+        }
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
             guard granted else {

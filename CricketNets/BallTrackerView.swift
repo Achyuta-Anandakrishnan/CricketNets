@@ -7,48 +7,71 @@ import CoreVideo
 /// No trajectory, no parabola, no shots, no scoring, no cooldown. Just: hold the ball up, and see
 /// whether the app can find it and how far away it thinks it is. Everything else in the 3D path is
 /// built on this working, so it is the first thing worth proving.
-@MainActor
+/// Threading follows `DepthTrajectoryTracker`: ARKit delivers frames on `queue`, the detection
+/// profile stays confined to that queue, and everything the UI reads is published on the main
+/// thread. It must NOT be `@MainActor` — the delegate callback is genuinely off the main actor, and
+/// reaching for main-actor state from inside it (via `assumeIsolated`) traps on the first frame.
 final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
 
-    @Published var detection: BallDetector.Detection?
-    @Published var lidarDistance: Double = 0
-    @Published var opticalDistance: Double = 0
-    @Published var framesSeen = 0
-    @Published var framesWithBall = 0
-    @Published var isRunning = false
-    @Published var lastError: String?
+    @Published private(set) var detection: BallDetector.Detection?
+    @Published private(set) var lidarDistance: Double = 0
+    @Published private(set) var opticalDistance: Double = 0
+    @Published private(set) var framesSeen = 0
+    @Published private(set) var framesWithBall = 0
+    @Published private(set) var isRunning = false
+    @Published private(set) var lastError: String?
+    /// The profile actually being matched against, tolerances included — shown so the swatch on
+    /// screen is what the detector is really looking for, not just what was calibrated.
+    @Published private(set) var activeProfileForDisplay: BallProfile?
 
     /// Loosen the calibrated tolerances live — a profile that's too tight is the likeliest reason
     /// a ball that's plainly in frame isn't found.
-    @Published var tolerance: Double = 1.0 { didSet { rebuildProfile() } }
+    @Published var tolerance: Double = 1.0 {
+        didSet { rebuildProfile() }
+    }
 
     let isSupported = ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     let session = ARSession()
 
-    private var baseProfile: BallProfile?
-    private var activeProfile: BallProfile?
+    private let captureID = UUID()
     private let queue = DispatchQueue(label: "cricketnets.balltracker")
-    private var busy = false
+
+    /// Main-thread copy; `queueProfile` is the one the delegate reads.
+    private var baseProfile: BallProfile?
+    private var queueProfile: BallProfile?
 
     func setProfile(_ profile: BallProfile?) {
         baseProfile = profile
         rebuildProfile()
     }
 
-    /// Scale the profile's tolerances by the slider. 1.0 is exactly what was calibrated.
+    /// Scale the calibrated tolerances by the slider. 1.0 is exactly what was calibrated.
     private func rebuildProfile() {
-        guard var p = baseProfile else { activeProfile = nil; return }
+        guard var p = baseProfile else {
+            activeProfileForDisplay = nil
+            queue.async { [weak self] in self?.queueProfile = nil }
+            return
+        }
         p.hueTol = min(0.5, p.hueTol * tolerance)
         p.satTol = min(1.0, p.satTol * tolerance)
         p.valTol = min(1.0, p.valTol * tolerance)
-        activeProfile = p
+        activeProfileForDisplay = p
+        queue.async { [weak self] in self?.queueProfile = p }
     }
 
+    @MainActor
     func start() {
-        guard isSupported, !isRunning else {
-            if !isSupported { lastError = "This device has no scene-depth sensor." }
+        guard isSupported else {
+            lastError = "This device has no scene-depth sensor."
             return
         }
+        guard !isRunning else { return }
+
+        // Take the camera off whoever else had it; two live sessions means a black preview.
+        CaptureArbiter.shared.acquire(id: captureID, name: "Ball tracker") { [weak self] in
+            self?.stop()
+        }
+
         let config = ARWorldTrackingConfiguration()
         config.frameSemantics.insert(.sceneDepth)
         if let fastest = ARWorldTrackingConfiguration.supportedVideoFormats
@@ -61,37 +84,36 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
         isRunning = true
         framesSeen = 0
         framesWithBall = 0
+        lastError = nil
     }
 
+    @MainActor
     func stop() {
         session.pause()
         isRunning = false
+        CaptureArbiter.shared.release(id: captureID)
     }
 
+    @MainActor
     func resetCounts() {
         framesSeen = 0
         framesWithBall = 0
     }
 
-    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    // MARK: Frame handling (queue)
+
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let pixelBuffer = frame.capturedImage
         let intrinsics = frame.camera.intrinsics
         let depthMap = frame.sceneDepth?.depthMap
         let confidenceMap = frame.sceneDepth?.confidenceMap
 
-        // Snapshot the profile without hopping actors per frame.
-        let profile = MainActor.assumeIsolated { self.activeProfile }
-        guard let profile else {
-            Task { @MainActor in
-                self.framesSeen += 1
-                self.detection = nil
-                self.lastError = "No ball calibrated — calibrate a ball first."
-            }
+        guard let profile = queueProfile else {
+            publish(nil, optical: 0, lidar: 0, error: "No ball calibrated — calibrate a ball first.")
             return
         }
 
         let found = BallDetector.detect(in: pixelBuffer, profile: profile)
-
         let width = Double(CVPixelBufferGetWidth(pixelBuffer))
         var optical = 0.0
         var lidar = 0.0
@@ -112,14 +134,20 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
             }
         }
 
-        Task { @MainActor in
-            self.framesSeen += 1
-            self.detection = found
-            self.lastError = nil
+        publish(found, optical: optical, lidar: lidar, error: nil)
+    }
+
+    private func publish(_ found: BallDetector.Detection?,
+                         optical: Double, lidar: Double, error: String?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            framesSeen += 1
+            detection = found
+            lastError = error
             if found != nil {
-                self.framesWithBall += 1
-                self.opticalDistance = optical
-                self.lidarDistance = lidar
+                framesWithBall += 1
+                opticalDistance = optical
+                lidarDistance = lidar
             }
         }
     }
@@ -197,6 +225,8 @@ struct BallTrackerView: View {
                 }
                 Text("\(model.framesWithBall)/\(model.framesSeen) frames")
                     .font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.6))
+                BallSwatch(profile: model.activeProfileForDisplay, showValues: true)
+                    .padding(.top, 2)
             }
             .padding(10)
             .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))

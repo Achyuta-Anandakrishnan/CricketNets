@@ -21,6 +21,7 @@
 		42414B11FB2D8D36FC8B44E6 /* ShotHUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821AA510F7C59C1681EEFCF9 /* ShotHUD.swift */; };
 		4E0EA6F1D671E7D5196C553A /* ScoringEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C56FFB2AA2C00E453BBCA227 /* ScoringEngine.swift */; };
 		5FC650490DD476F95B3B7648 /* FieldView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64F48D56F237F5DB7CF5601 /* FieldView.swift */; };
+		66660470CAC0845ED24AD753 /* CaptureArbiter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81C78289D2632AC665DCE899 /* CaptureArbiter.swift */; };
 		730F5CCEBBD8A3A504E7F51A /* BallPhysicsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A0FFFB5A48EDAE9565B714 /* BallPhysicsTests.swift */; };
 		781F1C1056DB6FF910F0C6A3 /* StatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F34FCF088DD4EFF783643D2 /* StatsView.swift */; };
 		7B2941E158A16B9C493F4D0F /* ScoringEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8AECEC6AA06F0392FD24368 /* ScoringEngineTests.swift */; };
@@ -66,6 +67,7 @@
 		7CB8556CE465CB88253A762B /* BallPhysics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallPhysics.swift; sourceTree = "<group>"; };
 		7D2B23DE4644877FA635F686 /* BallProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallProfile.swift; sourceTree = "<group>"; };
 		7E8F54B89D255B987502F946 /* DepthTrajectoryTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthTrajectoryTracker.swift; sourceTree = "<group>"; };
+		81C78289D2632AC665DCE899 /* CaptureArbiter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureArbiter.swift; sourceTree = "<group>"; };
 		821AA510F7C59C1681EEFCF9 /* ShotHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShotHUD.swift; sourceTree = "<group>"; };
 		90FFE047F95C9EF9796165A2 /* FieldModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FieldModel.swift; sourceTree = "<group>"; };
 		94A03018C8864CC5F995DBAF /* CameraController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraController.swift; sourceTree = "<group>"; };
@@ -103,6 +105,7 @@
 				F6F4BEC5A82EB16979CE0738 /* Calibration.swift */,
 				D6C1EC67039742731F64E04C /* CalibrationView.swift */,
 				94A03018C8864CC5F995DBAF /* CameraController.swift */,
+				81C78289D2632AC665DCE899 /* CaptureArbiter.swift */,
 				B18BCF6249A8C5F22F05CB2D /* ContentView.swift */,
 				EE325507F5BA9D8C766ED828 /* CricketNetsApp.swift */,
 				40F25B8FA0C708D4CA482A29 /* DepthNetsView.swift */,
@@ -258,6 +261,7 @@
 				B8882F4EA18D9A24FD89259C /* Calibration.swift in Sources */,
 				00BCE5499DA8E30C4634DA99 /* CalibrationView.swift in Sources */,
 				0E0BAB3410B837D807C98D0B /* CameraController.swift in Sources */,
+				66660470CAC0845ED24AD753 /* CaptureArbiter.swift in Sources */,
 				1E060457DB9881EC0BCCECDC /* ContentView.swift in Sources */,
 				82CCD0BCDBBEB5FB6EA51442 /* CricketNetsApp.swift in Sources */,
 				C9DC3138DF41672A04F7850E /* DepthNetsView.swift in Sources */,
@@ -312,7 +316,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 6W6R7FTLUS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";
@@ -355,7 +359,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 6W6R7FTLUS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";

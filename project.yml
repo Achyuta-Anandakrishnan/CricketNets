@@ -17,7 +17,7 @@ targets:
         # Bump MARKETING_VERSION per release, CURRENT_PROJECT_VERSION per build you install.
         # Both are shown on the Nets idle screen so you can confirm what's actually on the phone.
         MARKETING_VERSION: "0.4"
-        CURRENT_PROJECT_VERSION: "4"
+        CURRENT_PROJECT_VERSION: "5"
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
