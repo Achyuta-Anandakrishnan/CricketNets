@@ -73,6 +73,10 @@ struct AccuracyTestView: View {
     /// noise is amplified by roughly 1/T² — over a 0.2 s window a couple of centimetres of LiDAR
     /// noise throws the reading out by ~20%, while over half a second it's negligible. Rejecting
     /// short falls is what stops the screen reporting confident nonsense.
+    ///
+    /// In drop-height terms this is further than it looks. Tracking only begins once the ball is
+    /// moving faster than `minShotSpeed`, which is 0.15 s and 11 cm into the fall, so 0.35 s of
+    /// *tracked* fall needs about **1.25 m** of drop. 1.5–2 m is where readings settle down.
     private static let minFallSeconds = 0.35
 
     @State private var lastRejection: String?
@@ -83,7 +87,7 @@ struct AccuracyTestView: View {
         }
         let duration = last.time - first.time
         guard duration >= Self.minFallSeconds else {
-            reject("too short a fall — drop from higher"); return
+            reject("fall too short — drop from 1.5 m or higher"); return
         }
         guard let g = BallPhysics.measuredGravity(worldSamples: samples) else {
             reject("couldn't fit the fall"); return
@@ -107,9 +111,9 @@ struct AccuracyTestView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("ACCURACY CHECK").font(.caption.bold()).tracking(1).foregroundStyle(.cyan)
-            Text("Hold the ball up as high as you can and drop it. Repeat 5 times.")
+            Text("Drop the ball from at least chest height. Repeat 5 times.")
                 .font(.subheadline).foregroundStyle(.white)
-            Text("A correct pipeline measures gravity at 9.81 m/s². Drop from high — a short fall is too noisy to measure, so the app will refuse it.")
+            Text("A correct pipeline measures gravity at 9.81 m/s². Below about 1.25 m the fall is too short to measure and gets rejected; 1.5–2 m reads best. Keep it in view and within 5 m.")
                 .font(.caption2).foregroundStyle(.white.opacity(0.65))
             HStack(spacing: 10) {
                 Text(tracker.isTracking ? "● FALLING" : "○ ready")
