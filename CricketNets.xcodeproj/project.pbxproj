@@ -30,8 +30,10 @@
 		95B505A41090A999F87A5CDD /* PlacementAndDepthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F84A2A5A6765D42709E06A /* PlacementAndDepthTests.swift */; };
 		9898FDBFFA5902591ECDBB9E /* BallProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B91FA7BDFE3A901BE7F8CF21 /* BallProfileTests.swift */; };
 		9DF24D28E64216DED35B2630 /* MotionMasker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0226C2E3E369932FCFC2B3C /* MotionMasker.swift */; };
+		A78C00A76436695A22F90F18 /* ShotAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2906851B0E0267555C459E /* ShotAssemblerTests.swift */; };
 		AE909A610200902A07B5E0A7 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1311EBA04A16968F4077AB /* AppState.swift */; };
 		B0277B144B03A31C20660CAA /* DepthTrajectoryTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8F54B89D255B987502F946 /* DepthTrajectoryTracker.swift */; };
+		B1CFCC9E49DC6CB9025B8A7B /* ShotAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0508EC00B1F9FA8060ADF615 /* ShotAssembler.swift */; };
 		B8882F4EA18D9A24FD89259C /* Calibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F4BEC5A82EB16979CE0738 /* Calibration.swift */; };
 		BDD09615EAD041590321BECA /* BallProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D2B23DE4644877FA635F686 /* BallProfile.swift */; };
 		BDECB2CC288E1B9DF8B98644 /* DepthPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B9125E59258AD3ABDD06117 /* DepthPathTests.swift */; };
@@ -54,12 +56,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0508EC00B1F9FA8060ADF615 /* ShotAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShotAssembler.swift; sourceTree = "<group>"; };
 		2B8F5D8654BE825C3119F8AD /* DepthTestingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthTestingView.swift; sourceTree = "<group>"; };
 		2E1311EBA04A16968F4077AB /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		39F84A2A5A6765D42709E06A /* PlacementAndDepthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementAndDepthTests.swift; sourceTree = "<group>"; };
 		40F25B8FA0C708D4CA482A29 /* DepthNetsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthNetsView.swift; sourceTree = "<group>"; };
 		43BDCBEA86A7C46FBA136ECF /* TestingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestingView.swift; sourceTree = "<group>"; };
 		492C37A7043C88EAF2FBD49B /* PixelFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelFormatTests.swift; sourceTree = "<group>"; };
+		4B2906851B0E0267555C459E /* ShotAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShotAssemblerTests.swift; sourceTree = "<group>"; };
 		4B9125E59258AD3ABDD06117 /* DepthPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthPathTests.swift; sourceTree = "<group>"; };
 		61DBF30544DD66BCF62C948A /* BallTrackerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallTrackerView.swift; sourceTree = "<group>"; };
 		6F34FCF088DD4EFF783643D2 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
@@ -118,6 +122,7 @@
 				A30D55107E7C395E3DD6358E /* PhonePlacement.swift */,
 				A9D1F78DB551B6921B84DDD9 /* SampleBuffer.swift */,
 				C56FFB2AA2C00E453BBCA227 /* ScoringEngine.swift */,
+				0508EC00B1F9FA8060ADF615 /* ShotAssembler.swift */,
 				821AA510F7C59C1681EEFCF9 /* ShotHUD.swift */,
 				6F34FCF088DD4EFF783643D2 /* StatsView.swift */,
 				43BDCBEA86A7C46FBA136ECF /* TestingView.swift */,
@@ -137,6 +142,7 @@
 				492C37A7043C88EAF2FBD49B /* PixelFormatTests.swift */,
 				39F84A2A5A6765D42709E06A /* PlacementAndDepthTests.swift */,
 				C8AECEC6AA06F0392FD24368 /* ScoringEngineTests.swift */,
+				4B2906851B0E0267555C459E /* ShotAssemblerTests.swift */,
 			);
 			path = CricketNetsTests;
 			sourceTree = "<group>";
@@ -245,6 +251,7 @@
 				EA835AEF62FDB5137BB7F48D /* PixelFormatTests.swift in Sources */,
 				95B505A41090A999F87A5CDD /* PlacementAndDepthTests.swift in Sources */,
 				7B2941E158A16B9C493F4D0F /* ScoringEngineTests.swift in Sources */,
+				A78C00A76436695A22F90F18 /* ShotAssemblerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -274,6 +281,7 @@
 				F0F7F6D2E80A2BE4B2F4EFC2 /* PhonePlacement.swift in Sources */,
 				1DBE3FC566B67DA4297CBB4E /* SampleBuffer.swift in Sources */,
 				4E0EA6F1D671E7D5196C553A /* ScoringEngine.swift in Sources */,
+				B1CFCC9E49DC6CB9025B8A7B /* ShotAssembler.swift in Sources */,
 				42414B11FB2D8D36FC8B44E6 /* ShotHUD.swift in Sources */,
 				781F1C1056DB6FF910F0C6A3 /* StatsView.swift in Sources */,
 				1BB2D55908F1B466738A3FB4 /* TestingView.swift in Sources */,
@@ -316,7 +324,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 6W6R7FTLUS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";
@@ -359,7 +367,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				DEVELOPMENT_TEAM = 6W6R7FTLUS;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Track the ball during net practice.";

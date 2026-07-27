@@ -22,21 +22,17 @@ import simd
 /// **Device only** — ARKit scene depth does not exist in the Simulator.
 final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
-    /// Running tally of what the gates did to the candidate trajectories Vision offered.
-    struct GateCounts: Equatable {
-        var candidates = 0
-        var tooLittleMotion = 0
-        var lowConfidence = 0
-        var wrongColor = 0
-        var accepted = 0
-
-        mutating func add(_ other: GateCounts) {
-            candidates += other.candidates
-            tooLittleMotion += other.tooLittleMotion
-            lowConfidence += other.lowConfidence
-            wrongColor += other.wrongColor
-            accepted += other.accepted
-        }
+    /// Where frames are lost, counted in the order they can fail. With per-frame detection the
+    /// pipeline is a short funnel, so a number that stops climbing names the stage that's broken.
+    struct FunnelCounts: Equatable {
+        /// Frames the detector found ball-coloured pixels in.
+        var ballSeen = 0
+        /// Found, but covering too much of the frame to be a ball — colour too loose.
+        var tooBroad = 0
+        /// Found, but LiDAR gave no usable distance — out of range, or reading the background.
+        var noDepth = 0
+        /// Turned into a 3D world point.
+        var resolved = 0
     }
 
     /// How well LiDAR is reading the ball right now — surfaced so the user can fix their setup
@@ -67,7 +63,7 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     @Published private(set) var liveAzimuthDeg: Double?
     /// Cumulative gate tally since tracking started — the fastest way to see which filter is the
     /// one rejecting everything.
-    @Published private(set) var gates = GateCounts()
+    @Published private(set) var funnel = FunnelCounts()
     /// Frames seen vs frames that produced a usable 3D point — the honest hit rate of this path.
     @Published private(set) var framesSeen = 0
     @Published private(set) var pointsResolved = 0
@@ -95,6 +91,16 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     private var aimedForward = simd_float2(0, -1)
     private var groundOffsetDegrees: Double = 0
     private var settleWork: DispatchWorkItem?
+    private var assembler = ShotAssembler()
+
+    /// Speed between the last two sightings — what the shot gate is judging.
+    @Published private(set) var lastSpeedMps: Double = 0
+
+    /// Speed above which movement counts as a struck shot rather than a carried ball.
+    var minShotSpeed: Double {
+        get { assembler.minShotSpeed }
+        set { assembler.minShotSpeed = newValue }
+    }
 
     // MARK: arQueue-confined state
 
@@ -116,22 +122,8 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     /// Distinguishes the live tracker from the testing screen's own instance in the arbiter.
     var ownerName = "3D tracking"
 
-    /// Vision's trajectory request is stateful, so one instance, touched only on `arQueue`.
-    private lazy var request: VNDetectTrajectoriesRequest = {
-        let req = VNDetectTrajectoriesRequest(frameAnalysisSpacing: .zero, trajectoryLength: 5)
-        req.objectMinimumNormalizedRadius = Self.defaultMinRadius
-        req.objectMaximumNormalizedRadius = Self.defaultMaxRadius
-        return req
-    }()
-
-    private static let defaultMinRadius: Float = 0.003
-    private static let defaultMaxRadius: Float = 0.20
-
-    /// Same gates as the fast path, so both tracking modes agree on what a ball looks like.
-    private var minTrajectoryMotion: Double = 0.03
-    private var minConfidence: Float = 0.3
+    /// What the detector matches against, tolerances already scaled. Frame-queue only.
     private var ballProfile: BallProfile?
-    private var colorGateEnabled = true
 
     /// LiDAR's usable envelope. Beyond ~5 m readings collapse to zero or noise.
     private static let minUsefulDepth: Float = 0.3
@@ -139,25 +131,30 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
     // MARK: Configuration
 
-    /// Forward the calibrated ball so the color gate rejects hands and the bat here too.
+    /// The calibrated ball, held on the main thread so tolerance changes can be re-applied to it.
+    private var baseProfile: BallProfile?
+    /// Multiplier on the calibrated tolerances, the same control the ball tracker exposes.
+    var colourTolerance: Double = 1.0 { didSet { pushProfile() } }
+
     func setBallProfile(_ profile: BallProfile?) {
-        arQueue.async { [weak self] in
-            guard let self else { return }
-            ballProfile = profile
-            request.objectMinimumNormalizedRadius = Float(profile?.minRadius ?? Double(Self.defaultMinRadius))
-            request.objectMaximumNormalizedRadius = Float(profile?.maxRadius ?? Double(Self.defaultMaxRadius))
-        }
+        baseProfile = profile
+        pushProfile()
     }
 
-    func setMinTrajectoryMotion(_ v: Double) { arQueue.async { [weak self] in self?.minTrajectoryMotion = v } }
-    func setMinConfidence(_ v: Float) { arQueue.async { [weak self] in self?.minConfidence = v } }
-
-    /// Turn the color gate off to isolate it — if detections appear the moment it's disabled, the
-    /// ball profile is the problem, not the detector.
-    func setColorGateEnabled(_ on: Bool) { arQueue.async { [weak self] in self?.colorGateEnabled = on } }
+    private func pushProfile() {
+        guard var p = baseProfile else {
+            arQueue.async { [weak self] in self?.ballProfile = nil }
+            return
+        }
+        p.hueTol = min(0.5, p.hueTol * colourTolerance)
+        p.satTol = min(1.0, p.satTol * colourTolerance)
+        p.valTol = min(1.0, p.valTol * colourTolerance)
+        let scaled = p
+        arQueue.async { [weak self] in self?.ballProfile = scaled }
+    }
 
     func resetCounters() {
-        gates = GateCounts()
+        funnel = FunnelCounts()
         framesSeen = 0
         pointsResolved = 0
     }
@@ -248,25 +245,30 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
         let transform = frame.displayTransform(for: .portrait, viewportSize: viewport)
         DispatchQueue.main.async { [weak self] in self?.displayTransform = transform }
 
-        guard let sample = SampleBufferFactory.make(from: pixelBuffer, timestamp: timestamp) else { return }
-
-        // Run on the raw captured image in its native landscape orientation. Unlike the 2D path,
-        // orientation doesn't matter here: every point becomes a world coordinate before it's used,
-        // and world space has no notion of how the phone was held.
-        let handler = VNImageRequestHandler(cmSampleBuffer: sample, orientation: .up, options: [:])
-        try? handler.perform([request])
-
-        guard
-            let best = bestObservation(in: request.results ?? [], colorSource: pixelBuffer),
-            let newest = best.detectedPoints.last
-        else {
+        // Per-frame colour detection rather than Vision's trajectory request. The trajectory
+        // detector only ever reported objects already flying on a parabola with a still camera,
+        // which meant it stayed silent for most of what happens in a net and gave no way to tell
+        // "can't see the ball" from "ball isn't flying". This sees the ball whenever it's visible.
+        guard let profile = ballProfile else {
+            publish(resolved: nil, reading: nil, ballPoint: nil)
+            return
+        }
+        guard let found = BallDetector.detect(in: pixelBuffer, profile: profile) else {
             // No ball this frame — clear the overlay rather than leaving a stale marker on screen.
             publish(resolved: nil, reading: nil, ballPoint: nil)
             return
         }
+        count { $0.ballSeen += 1 }
 
-        // Vision reports a bottom-left origin; depth maps and camera intrinsics are top-left.
-        let normalized = CGPoint(x: CGFloat(newest.x), y: 1 - CGFloat(newest.y))
+        guard found.looksLikeABall else {
+            // Matched something, but it's most of the frame — the colour is too loose to trust.
+            count { $0.tooBroad += 1 }
+            publish(resolved: nil, reading: nil, ballPoint: found.center)
+            return
+        }
+
+        // Already captured-image normalized with a top-left origin, matching the depth map.
+        let normalized = found.center
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -285,6 +287,7 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
               reading.distance >= Self.minUsefulDepth,
               reading.distance <= Self.maxUsefulDepth
         else {
+            count { $0.noDepth += 1 }
             publish(resolved: nil, reading: reading, ballPoint: normalized)
             return
         }
@@ -298,33 +301,6 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
         publish(resolved: BallPhysics.WorldSample(position: world, time: timestamp),
                 reading: reading,
                 ballPoint: normalized)
-    }
-
-    /// The highest-confidence trajectory clearing the motion, confidence and color gates — the same
-    /// three the fast path applies. Tallies why each candidate was dropped, so a gate that is
-    /// silently eating every detection shows up as a number rather than as "nothing happens".
-    private func bestObservation(in observations: [VNTrajectoryObservation],
-                                 colorSource: CVPixelBuffer) -> VNTrajectoryObservation? {
-        var best: VNTrajectoryObservation?
-        var counts = GateCounts()
-        for obs in observations {
-            counts.candidates += 1
-            guard TrajectoryDetector.pathLength(obs.detectedPoints) >= minTrajectoryMotion else {
-                counts.tooLittleMotion += 1; continue
-            }
-            guard obs.confidence > minConfidence else {
-                counts.lowConfidence += 1; continue
-            }
-            if colorGateEnabled, let ballProfile,
-               TrajectoryDetector.colorFraction(of: obs, in: colorSource, profile: ballProfile) < 0.7 {
-                counts.wrongColor += 1; continue
-            }
-            counts.accepted += 1
-            if best == nil || obs.confidence > best!.confidence { best = obs }
-        }
-        let tally = counts
-        DispatchQueue.main.async { [weak self] in self?.gates.add(tally) }
-        return best
     }
 
     /// What a depth lookup for the ball actually found — reported in full so the 3D testing screen
@@ -434,6 +410,14 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
                                 confidentPixels: confident, sampledPixels: sampled)
     }
 
+    /// Bump a funnel counter from the frame queue.
+    private func count(_ change: @escaping (inout FunnelCounts) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            change(&funnel)
+        }
+    }
+
     /// Hop a frame's outcome to the main thread, where the published state and shot assembly live.
     private func publish(resolved: BallPhysics.WorldSample?,
                          reading: BallDepthReading?,
@@ -450,6 +434,7 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
             }()
             guard let resolved else { return }
             pointsResolved += 1
+            funnel.resolved += 1
             append(resolved)
         }
     }
@@ -459,23 +444,35 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
 
 private extension DepthTrajectoryTracker {
 
-    /// Collect a sample and restart the settle timer. A shot is "over" when points stop arriving.
+    /// Feed a sighting to the assembler, which decides whether it's part of a shot.
     func append(_ sample: BallPhysics.WorldSample) {
-        samples.append(sample)
-        isTracking = true
-        recomputeLiveAzimuth()
+        assembler.minSamples = minSamplesPerShot
+        _ = assembler.add(sample)
 
+        samples = assembler.samples
+        isTracking = assembler.isTracking
+        lastSpeedMps = assembler.lastSpeed
+        if isTracking { recomputeLiveAzimuth() }
+
+        scheduleSettleCheck(after: sample.time)
+    }
+
+    /// The ball going quiet produces no further frames, so the end of a shot has to be noticed on a
+    /// timer rather than on arrival of the next sighting.
+    func scheduleSettleCheck(after sampleTime: TimeInterval) {
         settleWork?.cancel()
+        guard assembler.isTracking else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if samples.count >= minSamplesPerShot {
-                onShotCompleted?(samples, groundDirection)
+            // The assembler works in the sighting clock, so ask it as if that much time had passed.
+            if case .completed(let finished) = assembler.checkSettled(now: sampleTime + assembler.settleSeconds) {
+                if let finished { onShotCompleted?(finished, groundDirection) }
+                samples = []
+                isTracking = false
             }
-            samples = []
-            isTracking = false
         }
         settleWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + assembler.settleSeconds, execute: work)
     }
 
     /// Direction of the shot so far, so placement can be tuned without waiting for a full shot.

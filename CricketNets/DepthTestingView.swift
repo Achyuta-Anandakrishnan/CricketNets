@@ -17,9 +17,8 @@ struct DepthTestingView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var tracker = DepthTrajectoryTracker()
 
-    @State private var minMotion = 0.03
-    @State private var minConf = 0.3
-    @State private var colorGate = true
+    @State private var tolerance = 1.0
+    @State private var minShotSpeed = 4.0
 
     var body: some View {
         GeometryReader { root in
@@ -128,18 +127,25 @@ struct DepthTestingView: View {
         }
     }
 
-    /// Which gate is eating the detections. If `candidates` climbs but `accepted` stays at zero,
-    /// the number next to it names the culprit immediately.
+    /// The pipeline as a funnel: seen → usable → depth → 3D. Whichever number stops climbing is
+    /// the stage that's broken, which is the whole reason the counters exist.
     private var gateTally: some View {
-        let g = tracker.gates
+        let f = tracker.funnel
         return VStack(alignment: .leading, spacing: 1) {
-            Text("\(g.candidates) candidates → \(g.accepted) passed")
+            Text("ball seen \(f.ballSeen) → 3D \(f.resolved)")
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(g.accepted > 0 ? .green : .orange)
-            if g.candidates > 0 && g.accepted == 0 {
-                Text("dropped: motion \(g.tooLittleMotion) · colour \(g.wrongColor) · conf \(g.lowConfidence)")
+                .foregroundStyle(f.resolved > 0 ? .green : .orange)
+            if f.ballSeen > 0 && f.resolved == 0 {
+                Text(f.noDepth > f.tooBroad
+                     ? "lost at depth (\(f.noDepth)) — move closer than 5 m"
+                     : "colour too loose (\(f.tooBroad)) — lower the tolerance")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.orange)
+            }
+            if tracker.lastSpeedMps > 0 {
+                Text(String(format: "ball speed %.1f m/s", tracker.lastSpeedMps))
                     .font(.system(size: 9).monospacedDigit())
-                    .foregroundStyle(.orange.opacity(0.9))
+                    .foregroundStyle(tracker.isTracking ? .green : .white.opacity(0.55))
             }
         }
     }
@@ -151,36 +157,28 @@ struct DepthTestingView: View {
             placement
             Divider().overlay(.white.opacity(0.2))
             TunableSlider(
-                title: "How far the ball must travel",
-                value: $minMotion,
-                range: 0...0.30,
-                reading: TuningWords.travel,
-                guidance: "Left = accepts smaller movements, so slow or short shots register but so does background wobble.",
-                onEdit: { tracker.setMinTrajectoryMotion($0) }
+                title: "How fussy about colour",
+                value: $tolerance,
+                range: 0.5...8,
+                reading: TuningWords.colourStrictness,
+                guidance: "Same control as the ball tracker. Right = finds the ball more easily, but may grab other things.",
+                onEdit: { tracker.colourTolerance = $0 }
             )
             TunableSlider(
-                title: "How certain before counting it",
-                value: $minConf,
-                range: 0...1,
-                reading: TuningWords.certainty,
-                guidance: "Left = counts shakier detections, catching more real shots and more noise.",
-                onEdit: { tracker.setMinConfidence(Float($0)) }
+                title: "How hard a hit counts as a shot",
+                value: $minShotSpeed,
+                range: 0.5...20,
+                reading: TuningWords.shotSpeed,
+                guidance: "The ball is visible even at rest now, so this is what separates a struck shot from a carried ball.",
+                onEdit: { tracker.minShotSpeed = $0 }
             )
 
-            HStack(spacing: 16) {
-                Toggle("Colour gate", isOn: $colorGate)
-                    .onChange(of: colorGate) { _, v in
-                        tracker.setColorGateEnabled(v)
-                        tracker.resetCounters()
-                    }
-                    .font(.caption).tint(.green).foregroundStyle(.white)
-                Button("Reset counts") { tracker.resetCounters() }
-                    .font(.caption2).buttonStyle(.bordered).tint(.white)
-            }
+            Button("Reset counts") { tracker.resetCounters() }
+                .font(.caption2).buttonStyle(.bordered).tint(.white)
 
             Text(app.isBallCalibrated
-                 ? "Green circle = the depth patch at the size it actually sampled. If detections only appear with the colour gate off, the ball profile is the problem."
-                 : "No ball calibrated, so the colour gate is inactive — everything that moves is a candidate.")
+                 ? "Green circle = the depth patch at the size it sampled. If it isn't on the ball, the distance is measuring something else."
+                 : "No ball calibrated — 3D tracking needs one, since it finds the ball by colour.")
                 .font(.caption2).foregroundStyle(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -258,8 +256,7 @@ struct DepthTestingView: View {
     }
 
     private func pushParams() {
-        tracker.setMinTrajectoryMotion(minMotion)
-        tracker.setMinConfidence(Float(minConf))
-        tracker.setColorGateEnabled(colorGate)
+        tracker.colourTolerance = tolerance
+        tracker.minShotSpeed = minShotSpeed
     }
 }

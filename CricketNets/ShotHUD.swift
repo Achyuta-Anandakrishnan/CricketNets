@@ -257,6 +257,16 @@ enum TuningWords {
         }
     }
 
+    /// Speed above which movement counts as a struck shot.
+    static func shotSpeed(_ mps: Double) -> String {
+        switch mps {
+        case ..<2:  return "any movement"
+        case ..<6:  return "a firm push (\(Int(mps * 3.6)) km/h)"
+        case ..<12: return "a proper shot (\(Int(mps * 3.6)) km/h)"
+        default:    return "only hard hits (\(Int(mps * 3.6)) km/h)"
+        }
+    }
+
     /// Rotation from the phone's aim to "down the ground".
     static func groundOffset(_ degrees: Double) -> String {
         if abs(degrees) < 3 { return "aimed down the ground" }
