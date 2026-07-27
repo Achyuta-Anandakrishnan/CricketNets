@@ -27,6 +27,10 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     struct FunnelCounts: Equatable {
         /// Frames the detector found ball-coloured pixels in.
         var ballSeen = 0
+        /// Of those, how many were found by following the prediction rather than a full scan.
+        /// A high share means tracking continuity is doing the work, which is what keeps a
+        /// blurred ball in flight from dropping out.
+        var followed = 0
         /// Found, but covering too much of the frame to be a ball — colour too loose.
         var tooBroad = 0
         /// Found, but LiDAR gave no usable distance — out of range, or reading the background.
@@ -124,6 +128,8 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
 
     /// What the detector matches against, tolerances already scaled. Frame-queue only.
     private var ballProfile: BallProfile?
+    /// Frame-to-frame continuity, so a blurred ball mid-flight isn't lost. Frame-queue only.
+    private var ballTracker = BallTracker()
 
     /// LiDAR's usable envelope. Beyond ~5 m readings collapse to zero or noise.
     private static let minUsefulDepth: Float = 0.3
@@ -253,15 +259,22 @@ extension DepthTrajectoryTracker: ARSessionDelegate {
             publish(resolved: nil, reading: nil, ballPoint: nil)
             return
         }
-        guard let found = BallDetector.detect(in: pixelBuffer, profile: profile) else {
+        // Follow the ball from where it was when possible; a full-frame scan is the fallback.
+        // This is what keeps a motion-blurred ball from dropping out mid-flight.
+        guard let hit = ballTracker.track(in: pixelBuffer, profile: profile, time: timestamp) else {
             // No ball this frame — clear the overlay rather than leaving a stale marker on screen.
             publish(resolved: nil, reading: nil, ballPoint: nil)
             return
         }
-        count { $0.ballSeen += 1 }
+        let found = hit.detection
+        count {
+            $0.ballSeen += 1
+            if hit.followed { $0.followed += 1 }
+        }
 
-        guard found.looksLikeABall else {
-            // Matched something, but it's most of the frame — the colour is too loose to trust.
+        // A followed hit is already trusted — it was found where the ball was predicted to be, so
+        // the frame-coverage check that guards a global scan doesn't apply.
+        guard hit.followed || found.looksLikeABall else {
             count { $0.tooBroad += 1 }
             publish(resolved: nil, reading: nil, ballPoint: found.center)
             return

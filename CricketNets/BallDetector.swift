@@ -17,6 +17,11 @@ import Foundation
 /// tell you which sensor to stop trusting.
 enum BallDetector {
 
+    /// Inclusive pixel bounds of the area being scanned.
+    private struct PixelBounds {
+        let x0: Int, y0: Int, x1: Int, y1: Int
+    }
+
     struct Detection: Equatable {
         /// Blob centre, normalized with a top-left origin.
         var center: CGPoint
@@ -50,27 +55,47 @@ enum BallDetector {
         var looksLikeABall: Bool { frameCoverage < 0.25 && concentration > 0.3 }
     }
 
-    /// Scan a frame for the largest blob of ball-coloured pixels.
+    /// Scan for the largest blob of ball-coloured pixels.
     ///
+    /// - Parameter region: normalized area to search (top-left origin). `nil` scans the whole frame.
+    ///   Restricting it is what makes following a ball cheap — a small window can be sampled finely
+    ///   and matched loosely without any risk of grabbing something on the other side of the net.
     /// - Parameter step: sampling stride in pixels. 8 turns a 1920-wide frame into a 240-wide mask,
-    ///   which is ample for a ball and cheap enough to run every frame.
+    ///   which is ample for acquiring a ball and cheap enough to run every frame.
     /// - Parameter minPixels: reject specks; below this a blob is noise, not a ball.
     static func detect(in buffer: CVPixelBuffer,
                        profile: BallProfile,
+                       region: CGRect? = nil,
                        step: Int = 8,
                        minPixels: Int = 4) -> Detection? {
         BallColor.withPixelReader(buffer) { reader -> Detection? in
-            let cols = reader.width / step
-            let rows = reader.height / step
+            // Pixel bounds of the search area, clamped into the frame.
+            let bounds: PixelBounds
+            if let r = region {
+                bounds = PixelBounds(
+                    x0: max(0, Int(r.minX * CGFloat(reader.width))),
+                    y0: max(0, Int(r.minY * CGFloat(reader.height))),
+                    x1: min(reader.width - 1, Int(r.maxX * CGFloat(reader.width))),
+                    y1: min(reader.height - 1, Int(r.maxY * CGFloat(reader.height))))
+            } else {
+                bounds = PixelBounds(x0: 0, y0: 0, x1: reader.width - 1, y1: reader.height - 1)
+            }
+            guard bounds.x1 > bounds.x0, bounds.y1 > bounds.y0 else { return nil }
+
+            let cols = (bounds.x1 - bounds.x0) / step + 1
+            let rows = (bounds.y1 - bounds.y0) / step + 1
             guard cols > 2, rows > 2 else { return nil }
 
             // 1. Binary mask of ball-coloured samples.
             var mask = [Bool](repeating: false, count: cols * rows)
             var totalMatched = 0
             for row in 0..<rows {
-                let y = row * step
+                let y = bounds.y0 + row * step
+                guard y <= bounds.y1 else { break }
                 for col in 0..<cols {
-                    let (r, g, b) = reader.rgb(x: col * step, y: y)
+                    let x = bounds.x0 + col * step
+                    guard x <= bounds.x1 else { break }
+                    let (r, g, b) = reader.rgb(x: x, y: y)
                     let hsv = BallColor.rgbToHSV(r, g, b)
                     if profile.matches(h: hsv.h, s: hsv.s, v: hsv.v) {
                         mask[row * cols + col] = true
@@ -115,11 +140,14 @@ enum BallDetector {
 
             guard best.count >= minPixels else { return nil }
 
-            // 3. Centre and equivalent-circle radius, back in full-frame terms.
+            // 3. Centre and equivalent-circle radius, back in FULL-FRAME terms — mask coordinates
+            //    are relative to the search region, so its origin has to be added back.
             let meanCol = Double(best.sumX) / Double(best.count)
             let meanRow = Double(best.sumY) / Double(best.count)
-            let center = CGPoint(x: (meanCol + 0.5) * Double(step) / Double(reader.width),
-                                 y: (meanRow + 0.5) * Double(step) / Double(reader.height))
+            let pixelX = Double(bounds.x0) + meanCol * Double(step)
+            let pixelY = Double(bounds.y0) + meanRow * Double(step)
+            let center = CGPoint(x: (pixelX + Double(step) / 2) / Double(reader.width),
+                                 y: (pixelY + Double(step) / 2) / Double(reader.height))
             let radiusPx = (Double(best.count) / .pi).squareRoot() * Double(step)
 
             return Detection(center: center,

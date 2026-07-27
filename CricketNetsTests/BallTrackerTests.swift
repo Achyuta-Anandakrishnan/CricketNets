@@ -1,0 +1,169 @@
+import XCTest
+import CoreVideo
+@testable import CricketNets
+
+/// Frame-to-frame continuity. The point of these is the recall case: a ball that a strict global
+/// scan would drop, but a loose search in the right place still finds.
+final class BallTrackerTests: XCTestCase {
+
+    private let width = 320, height = 240
+
+    /// A frame with a ball of the given colour at a normalized position.
+    private func frame(at center: CGPoint, radius: Double,
+                       ball: (UInt8, UInt8, UInt8)) -> CVPixelBuffer {
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()] as CFDictionary,
+                            &pb)
+        let buffer = pb!
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        let cx = center.x * Double(width), cy = center.y * Double(height)
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let inside = hypot(Double(x) - cx, Double(y) - cy) <= radius
+                let c = inside ? ball : (30, 30, 30)
+                let p = y * rowBytes + x * 4
+                base[p] = c.2; base[p + 1] = c.1; base[p + 2] = c.0; base[p + 3] = 255
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        return buffer
+    }
+
+    private let blue: (UInt8, UInt8, UInt8) = (25, 70, 210)
+
+    private func blueProfile() -> BallProfile {
+        let hsv = BallColor.rgbToHSV(25.0 / 255, 70.0 / 255, 210.0 / 255)
+        return BallProfile(hue: hsv.h, saturation: hsv.s, brightness: hsv.v)
+    }
+
+    // MARK: Region search
+
+    func testRegionSearchFindsTheBallInFullFrameCoordinates() throws {
+        // A blob found inside a window must still report where it is in the WHOLE frame, or the
+        // depth lookup and every world coordinate after it land somewhere else entirely.
+        let buffer = frame(at: CGPoint(x: 0.7, y: 0.3), radius: 18, ball: blue)
+        let window = CGRect(x: 0.55, y: 0.15, width: 0.3, height: 0.3)
+        let found = try XCTUnwrap(BallDetector.detect(in: buffer, profile: blueProfile(),
+                                                      region: window, step: 3))
+        XCTAssertEqual(found.center.x, 0.7, accuracy: 0.04)
+        XCTAssertEqual(found.center.y, 0.3, accuracy: 0.04)
+    }
+
+    func testRegionSearchIgnoresABallOutsideTheWindow() {
+        let buffer = frame(at: CGPoint(x: 0.2, y: 0.2), radius: 18, ball: blue)
+        let elsewhere = CGRect(x: 0.6, y: 0.6, width: 0.3, height: 0.3)
+        XCTAssertNil(BallDetector.detect(in: buffer, profile: blueProfile(),
+                                         region: elsewhere, step: 3))
+    }
+
+    func testWholeFrameAndRegionAgreeOnPosition() throws {
+        let buffer = frame(at: CGPoint(x: 0.4, y: 0.6), radius: 20, ball: blue)
+        let global = try XCTUnwrap(BallDetector.detect(in: buffer, profile: blueProfile()))
+        let local = try XCTUnwrap(BallDetector.detect(in: buffer, profile: blueProfile(),
+                                                      region: CGRect(x: 0.25, y: 0.45,
+                                                                     width: 0.3, height: 0.3),
+                                                      step: 3))
+        XCTAssertEqual(global.center.x, local.center.x, accuracy: 0.03)
+        XCTAssertEqual(global.center.y, local.center.y, accuracy: 0.03)
+    }
+
+    // MARK: Following
+
+    func testFirstSightingIsAnAcquisition() throws {
+        var tracker = BallTracker()
+        let hit = try XCTUnwrap(tracker.track(in: frame(at: CGPoint(x: 0.5, y: 0.5), radius: 20, ball: blue),
+                                              profile: blueProfile(), time: 0))
+        XCTAssertFalse(hit.followed, "nothing to follow yet")
+        XCTAssertTrue(tracker.isLocked)
+    }
+
+    func testSubsequentSightingsAreFollowed() throws {
+        var tracker = BallTracker()
+        _ = tracker.track(in: frame(at: CGPoint(x: 0.3, y: 0.5), radius: 20, ball: blue),
+                          profile: blueProfile(), time: 0)
+        let hit = try XCTUnwrap(tracker.track(in: frame(at: CGPoint(x: 0.34, y: 0.5), radius: 20, ball: blue),
+                                              profile: blueProfile(), time: 1.0 / 60))
+        XCTAssertTrue(hit.followed)
+        XCTAssertEqual(hit.detection.center.x, 0.34, accuracy: 0.04)
+    }
+
+    func testAWashedOutBallIsStillFoundOnceLockedOn() throws {
+        // The reason this class exists. A motion-blurred ball desaturates toward the background,
+        // enough that a strict global scan drops it — but the loosened search in the predicted
+        // window still picks it up, so the shot doesn't lose frames mid-flight.
+        let profile = blueProfile()
+        let faded: (UInt8, UInt8, UInt8) = (70, 100, 150)   // washed out, same hue family
+
+        XCTAssertNil(BallDetector.detect(in: frame(at: CGPoint(x: 0.5, y: 0.5), radius: 20, ball: faded),
+                                         profile: profile),
+                     "a strict global scan should miss this")
+
+        var tracker = BallTracker()
+        _ = tracker.track(in: frame(at: CGPoint(x: 0.46, y: 0.5), radius: 20, ball: blue),
+                          profile: profile, time: 0)
+        let hit = tracker.track(in: frame(at: CGPoint(x: 0.5, y: 0.5), radius: 20, ball: faded),
+                                profile: profile, time: 1.0 / 60)
+        XCTAssertNotNil(hit, "following should recover the frame a global scan loses")
+        XCTAssertEqual(hit?.followed, true)
+    }
+
+    func testLockIsDroppedAfterCoastingTooLong() throws {
+        var tracker = BallTracker()
+        _ = tracker.track(in: frame(at: CGPoint(x: 0.3, y: 0.5), radius: 20, ball: blue),
+                          profile: blueProfile(), time: 0)
+        // A long gap makes the prediction worthless; it must re-acquire rather than search stale.
+        let hit = try XCTUnwrap(tracker.track(in: frame(at: CGPoint(x: 0.8, y: 0.5), radius: 20, ball: blue),
+                                              profile: blueProfile(), time: 2.0))
+        XCTAssertFalse(hit.followed, "should have re-acquired, not followed a stale prediction")
+        XCTAssertEqual(hit.detection.center.x, 0.8, accuracy: 0.05)
+    }
+
+    func testAnEmptyFrameClearsTheLock() {
+        var tracker = BallTracker()
+        _ = tracker.track(in: frame(at: CGPoint(x: 0.5, y: 0.5), radius: 20, ball: blue),
+                          profile: blueProfile(), time: 0)
+        XCTAssertTrue(tracker.isLocked)
+
+        let gone = tracker.track(in: frame(at: CGPoint(x: 0.5, y: 0.5), radius: 0, ball: blue),
+                                 profile: blueProfile(), time: 1.0 / 60)
+        XCTAssertNil(gone)
+        XCTAssertFalse(tracker.isLocked, "a stale lock would drag the next window to the wrong place")
+    }
+
+    func testFollowingTracksAcrossTheFrame() throws {
+        // Walk the ball across several frames; it must stay followed the whole way rather than
+        // falling back to a global scan, which is what the funnel's "% followed" reports.
+        var tracker = BallTracker()
+        var followedCount = 0
+        for i in 0..<8 {
+            let x = 0.2 + Double(i) * 0.05
+            let hit = tracker.track(in: frame(at: CGPoint(x: x, y: 0.5), radius: 18, ball: blue),
+                                    profile: blueProfile(), time: Double(i) / 60)
+            XCTAssertNotNil(hit, "lost the ball at frame \(i)")
+            if hit?.followed == true { followedCount += 1 }
+        }
+        XCTAssertGreaterThanOrEqual(followedCount, 6, "should follow rather than re-scan each frame")
+    }
+
+    // MARK: Profile loosening
+
+    func testLooseningWidensToleranceWithoutMovingTheColour() {
+        let p = blueProfile()
+        let loose = p.loosened(by: 3)
+        XCTAssertEqual(loose.hue, p.hue)
+        XCTAssertEqual(loose.saturation, p.saturation)
+        XCTAssertGreaterThan(loose.hueTol, p.hueTol)
+        XCTAssertGreaterThan(loose.satTol, p.satTol)
+    }
+
+    func testLooseningIsClamped() {
+        let wild = blueProfile().loosened(by: 100)
+        XCTAssertLessThanOrEqual(wild.hueTol, 0.5)
+        XCTAssertLessThanOrEqual(wild.satTol, 1.0)
+        XCTAssertLessThanOrEqual(wild.valTol, 1.0)
+    }
+}

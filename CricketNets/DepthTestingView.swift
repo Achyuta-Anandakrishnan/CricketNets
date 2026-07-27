@@ -135,6 +135,11 @@ struct DepthTestingView: View {
             Text("ball seen \(f.ballSeen) → 3D \(f.resolved)")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(f.resolved > 0 ? .green : .orange)
+            if f.ballSeen > 0 {
+                Text("\(Int(Double(f.followed) / Double(f.ballSeen) * 100))% followed, not re-scanned")
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.5))
+            }
             if f.ballSeen > 0 && f.resolved == 0 {
                 Text(f.noDepth > f.tooBroad
                      ? "lost at depth (\(f.noDepth)) — move closer than 5 m"

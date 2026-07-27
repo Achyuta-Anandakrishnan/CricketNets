@@ -20,6 +20,8 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var framesWithBall = 0
     @Published private(set) var isRunning = false
     @Published private(set) var lastError: String?
+    /// True when the last sighting came from following the ball rather than a full-frame scan.
+    @Published private(set) var wasFollowed = false
     /// The profile actually being matched against, tolerances included — shown so the swatch on
     /// screen is what the detector is really looking for, not just what was calibrated.
     @Published private(set) var activeProfileForDisplay: BallProfile?
@@ -59,6 +61,8 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
     /// Main-thread copy; `queueProfile` is the one the delegate reads.
     private var baseProfile: BallProfile?
     private var queueProfile: BallProfile?
+    /// Frame-to-frame continuity. Queue-confined alongside the profile.
+    private var tracker = BallTracker()
 
     func setProfile(_ profile: BallProfile?) {
         baseProfile = profile
@@ -131,12 +135,13 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
         let transform = frame.displayTransform(for: .portrait, viewportSize: viewport)
 
         guard let profile = queueProfile else {
-            publish(nil, optical: 0, lidar: 0, transform: transform,
+            publish(nil, optical: 0, lidar: 0, transform: transform, followed: false,
                     error: "No ball calibrated — calibrate a ball first.")
             return
         }
 
-        let found = BallDetector.detect(in: pixelBuffer, profile: profile)
+        let hit = tracker.track(in: pixelBuffer, profile: profile, time: frame.timestamp)
+        let found = hit?.detection
         let width = Double(CVPixelBufferGetWidth(pixelBuffer))
         var optical = 0.0
         var lidar = 0.0
@@ -157,18 +162,20 @@ final class BallTrackerModel: NSObject, ObservableObject, ARSessionDelegate {
             }
         }
 
-        publish(found, optical: optical, lidar: lidar, transform: transform, error: nil)
+        publish(found, optical: optical, lidar: lidar, transform: transform,
+                followed: hit?.followed ?? false, error: nil)
     }
 
     private func publish(_ found: BallDetector.Detection?,
                          optical: Double, lidar: Double,
-                         transform: CGAffineTransform, error: String?) {
+                         transform: CGAffineTransform, followed: Bool, error: String?) {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             framesSeen += 1
             detection = found
             displayTransform = transform
             lastError = error
+            wasFollowed = followed
             if found != nil {
                 framesWithBall += 1
                 opticalDistance = optical
@@ -249,9 +256,9 @@ struct BallTrackerView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("BALL TRACKER").font(.caption.bold()).tracking(1).foregroundStyle(.cyan)
                 if let d = model.detection {
-                    Text(d.looksLikeABall ? "FOUND" : "TOO BROAD")
+                    Text(model.wasFollowed ? "FOLLOWING" : (d.looksLikeABall ? "FOUND" : "TOO BROAD"))
                         .font(.title3.bold())
-                        .foregroundStyle(d.looksLikeABall ? .green : .orange)
+                        .foregroundStyle(model.wasFollowed || d.looksLikeABall ? .green : .orange)
                     Text("\(d.pixelCount) px blob · \(Int(d.frameCoverage * 100))% of frame")
                         .font(.caption2.monospacedDigit()).foregroundStyle(.white)
                     Text("\(d.totalMatched) px match this colour · \(Int(d.concentration * 100))% in the blob")
