@@ -111,6 +111,38 @@ final class BallTrackerTests: XCTestCase {
         XCTAssertEqual(hit?.followed, true)
     }
 
+    func testAFastBallIsFollowedFromTheSecondSighting() throws {
+        // The bug this guards. With no velocity yet, the prediction is simply "where it was" — but
+        // a struck ball has already moved ~14-28% of the view. A window sized from the ball's
+        // radius spans ~5%, so the follow always missed, the tracker fell back to the strict global
+        // scan, and velocity was never established. It could never begin following a fast ball.
+        var tracker = BallTracker()
+        let profile = blueProfile()
+
+        _ = tracker.track(in: frame(at: CGPoint(x: 0.25, y: 0.5), radius: 18, ball: blue),
+                          profile: profile, time: 0)
+        // 18% of the view in one frame — a hard shot at typical net distance.
+        let hit = try XCTUnwrap(tracker.track(in: frame(at: CGPoint(x: 0.43, y: 0.5), radius: 18, ball: blue),
+                                              profile: profile, time: 1.0 / 60))
+        XCTAssertTrue(hit.followed, "a fast ball must be followed, not re-acquired every frame")
+        XCTAssertEqual(hit.detection.center.x, 0.43, accuracy: 0.04)
+    }
+
+    func testAFastBallStaysFollowedOnceMoving() throws {
+        // Having established velocity, the window narrows again but must still keep up.
+        var tracker = BallTracker()
+        var followed = 0
+        for i in 0..<5 {
+            let x = 0.15 + Double(i) * 0.17
+            guard let hit = tracker.track(in: frame(at: CGPoint(x: x, y: 0.5), radius: 18, ball: blue),
+                                          profile: blueProfile(), time: Double(i) / 60)
+            else { return XCTFail("lost a fast ball at frame \(i)") }
+            if hit.followed { followed += 1 }
+        }
+        XCTAssertGreaterThanOrEqual(followed, 3,
+                                    "should track a fast ball rather than re-scanning each frame")
+    }
+
     func testLockIsDroppedAfterCoastingTooLong() throws {
         var tracker = BallTracker()
         _ = tracker.track(in: frame(at: CGPoint(x: 0.3, y: 0.5), radius: 20, ball: blue),

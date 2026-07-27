@@ -19,12 +19,26 @@ import Foundation
 struct BallTracker {
 
     /// How far around the predicted position to search, as a multiple of the ball's radius.
-    /// Wide enough to absorb a bad velocity estimate, narrow enough to stay unambiguous.
     var searchRadiusMultiple: Double = 5
 
     /// Smallest search window, as a fraction of frame width — a tiny ball still needs somewhere
     /// to be found.
     var minSearchHalfWidth: Double = 0.04
+
+    /// Window used on the first follow after acquiring, before any velocity is known.
+    ///
+    /// This has to be large, and getting it wrong stops the tracker working on exactly the shots
+    /// that matter. With no velocity the prediction is simply "where it was", but a struck ball has
+    /// already moved a long way: at 3.5 m a 100 km/h shot travels ~14% of the view between frames,
+    /// and a 145 km/h one ~20%. A window sized from the ball's radius alone spans ~5%, so the
+    /// follow always missed, the tracker fell back to the strict global scan, and velocity was
+    /// never established — meaning it could never begin following a fast ball at all.
+    var bootstrapHalfWidth: Double = 0.30
+
+    /// Extra margin added around the predicted point once velocity IS known, as a fraction of the
+    /// distance the ball is expected to travel this frame. Covers acceleration and jitter in the
+    /// estimate without reopening the window to the whole frame.
+    var predictionMargin: Double = 0.6
 
     /// How much to relax the colour tolerances inside the predicted window. Safe to be generous:
     /// position is doing the discriminating that colour normally has to.
@@ -47,6 +61,8 @@ struct BallTracker {
     private var lastTime: TimeInterval?
     /// Normalized units per second.
     private var velocity: CGVector = .zero
+    /// False until two sightings have been paired up; until then `velocity` is a guess of zero.
+    private var hasVelocity = false
 
     var isLocked: Bool { last != nil }
 
@@ -64,6 +80,7 @@ struct BallTracker {
         last = nil
         lastTime = nil
         velocity = .zero
+        hasVelocity = false
     }
 
     // MARK: Following
@@ -81,15 +98,32 @@ struct BallTracker {
         // Where it should be now, carrying the last known velocity forward.
         let predicted = CGPoint(x: last.center.x + velocity.dx * dt,
                                 y: last.center.y + velocity.dy * dt)
-        let half = max(minSearchHalfWidth, last.radiusNormalized * searchRadiusMultiple)
+
+        // Without a velocity estimate the prediction is just the old position, which for a struck
+        // ball is nowhere near it — so search wide. Once velocity is known the prediction is good
+        // and the window can close down to the ball plus a margin for acceleration.
+        let half: Double
+        if hasVelocity {
+            let travel = hypot(velocity.dx, velocity.dy) * dt
+            half = max(minSearchHalfWidth,
+                       last.radiusNormalized * searchRadiusMultiple + travel * predictionMargin)
+        } else {
+            half = bootstrapHalfWidth
+        }
+
         let window = CGRect(x: predicted.x - half, y: predicted.y - half,
                             width: half * 2, height: half * 2)
 
+        // The colour gate stays loose even in the wide bootstrap window, because a fast ball is
+        // blurred on every frame including that one — a strict gate there simply can't get started.
+        // What keeps that safe is size: a ball's apparent radius barely changes between frames, so
+        // a blob of the wrong size is rejected regardless of how well its colour matches.
         guard let found = BallDetector.detect(in: buffer,
                                               profile: profile.loosened(by: trackingTolerance),
                                               region: window,
                                               step: trackingStep,
-                                              minPixels: 3)
+                                              minPixels: 3),
+              isPlausibleSize(found, comparedTo: last)
         else { return nil }
 
         update(found, at: time)
@@ -113,16 +147,33 @@ struct BallTracker {
         return Result(detection: found, followed: false)
     }
 
+    /// Between two frames a ball barely changes apparent size — it would have to halve or double
+    /// its distance to do so. Anything outside that band is a different object that happens to be
+    /// the right colour, which is exactly what a loosened gate in a wide window risks finding.
+    private func isPlausibleSize(_ found: BallDetector.Detection,
+                                 comparedTo previous: BallDetector.Detection) -> Bool {
+        guard previous.radiusNormalized > 0 else { return true }
+        let ratio = found.radiusNormalized / previous.radiusNormalized
+        return ratio > 0.4 && ratio < 2.5
+    }
+
     /// Record a sighting and re-estimate velocity.
     private mutating func update(_ found: BallDetector.Detection, at time: TimeInterval) {
         if let last, let lastTime, time > lastTime {
             let dt = time - lastTime
             let measured = CGVector(dx: (found.center.x - last.center.x) / dt,
                                     dy: (found.center.y - last.center.y) / dt)
-            // Light smoothing: enough to survive one jittery centre, not so much that it lags a
-            // ball that is genuinely accelerating off the bat.
-            velocity = CGVector(dx: velocity.dx * 0.3 + measured.dx * 0.7,
-                                dy: velocity.dy * 0.3 + measured.dy * 0.7)
+            if hasVelocity {
+                // Light smoothing: enough to survive one jittery centre, not so much that it lags
+                // a ball that is genuinely accelerating off the bat.
+                velocity = CGVector(dx: velocity.dx * 0.3 + measured.dx * 0.7,
+                                    dy: velocity.dy * 0.3 + measured.dy * 0.7)
+            } else {
+                // Take the first measurement whole. Blending it against the zero placeholder would
+                // under-read the speed just when the window most needs to be pointed correctly.
+                velocity = measured
+                hasVelocity = true
+            }
         }
         last = found
         lastTime = time
