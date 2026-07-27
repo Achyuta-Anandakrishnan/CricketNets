@@ -172,6 +172,88 @@ enum BallColor {
         return BallProfile(hue: hsv.h, saturation: hsv.s, brightness: hsv.v)
     }
 
+    // MARK: Bulk scanning
+
+    /// Reads single pixels as RGB without re-locking the buffer. Only valid inside
+    /// `withPixelReader`, which owns the lock.
+    struct PixelReader {
+        let width: Int
+        let height: Int
+        fileprivate let kind: Kind
+
+        fileprivate enum Kind {
+            case bgra(ptr: UnsafePointer<UInt8>, rowBytes: Int)
+            case ycbcr(luma: UnsafePointer<UInt8>, lumaRow: Int,
+                       chroma: UnsafePointer<UInt8>, chromaRow: Int,
+                       chromaW: Int, chromaH: Int, videoRange: Bool)
+        }
+
+        func rgb(x: Int, y: Int) -> (Double, Double, Double) {
+            switch kind {
+            case let .bgra(ptr, rowBytes):
+                let p = y * rowBytes + x * 4
+                return (Double(ptr[p + 2]) / 255, Double(ptr[p + 1]) / 255, Double(ptr[p]) / 255)
+
+            case let .ycbcr(luma, lumaRow, chroma, chromaRow, chromaW, chromaH, videoRange):
+                var yy = Double(luma[y * lumaRow + x])
+                let ci = min(y / 2, chromaH - 1) * chromaRow + min(x / 2, chromaW - 1) * 2
+                var cb = Double(chroma[ci]) - 128
+                var cr = Double(chroma[ci + 1]) - 128
+                if videoRange {
+                    yy = (yy - 16) * 255 / 219
+                    cb *= 255 / 224
+                    cr *= 255 / 224
+                }
+                func clamp(_ v: Double) -> Double { min(max(v / 255, 0), 1) }
+                return (clamp(yy + 1.402 * cr),
+                        clamp(yy - 0.344136 * cb - 0.714136 * cr),
+                        clamp(yy + 1.772 * cb))
+            }
+        }
+    }
+
+    /// Lock the buffer once and scan many pixels inside `body`.
+    ///
+    /// Sampling a whole frame through `averageRGB` would lock and unlock per pixel, which at tens of
+    /// thousands of pixels a frame is far too slow to run live.
+    static func withPixelReader<T>(_ buffer: CVPixelBuffer, _ body: (PixelReader) -> T) -> T? {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+        switch CVPixelBufferGetPixelFormatType(buffer) {
+        case kCVPixelFormatType_32BGRA:
+            guard !CVPixelBufferIsPlanar(buffer), let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
+            let reader = PixelReader(
+                width: CVPixelBufferGetWidth(buffer),
+                height: CVPixelBufferGetHeight(buffer),
+                kind: .bgra(ptr: UnsafePointer(base.assumingMemoryBound(to: UInt8.self)),
+                            rowBytes: CVPixelBufferGetBytesPerRow(buffer)))
+            return body(reader)
+
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+             kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
+            guard CVPixelBufferGetPlaneCount(buffer) >= 2,
+                  let lumaBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 0),
+                  let chromaBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 1)
+            else { return nil }
+            let videoRange = CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            let reader = PixelReader(
+                width: CVPixelBufferGetWidthOfPlane(buffer, 0),
+                height: CVPixelBufferGetHeightOfPlane(buffer, 0),
+                kind: .ycbcr(luma: UnsafePointer(lumaBase.assumingMemoryBound(to: UInt8.self)),
+                             lumaRow: CVPixelBufferGetBytesPerRowOfPlane(buffer, 0),
+                             chroma: UnsafePointer(chromaBase.assumingMemoryBound(to: UInt8.self)),
+                             chromaRow: CVPixelBufferGetBytesPerRowOfPlane(buffer, 1),
+                             chromaW: CVPixelBufferGetWidthOfPlane(buffer, 1),
+                             chromaH: CVPixelBufferGetHeightOfPlane(buffer, 1),
+                             videoRange: videoRange))
+            return body(reader)
+
+        default:
+            return nil
+        }
+    }
+
     static func rgbToHSV(_ r: Double, _ g: Double, _ b: Double) -> (h: Double, s: Double, v: Double) {
         let mx = max(r, g, b), mn = min(r, g, b), d = mx - mn
         var h = 0.0

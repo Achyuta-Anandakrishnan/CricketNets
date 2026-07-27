@@ -14,6 +14,7 @@ struct DepthNetsView: View {
 
     @State private var running = false
     @State private var showTesting = false
+    @State private var showBallTracker = false
 
     var body: some View {
         ZStack {
@@ -46,6 +47,11 @@ struct DepthNetsView: View {
             DepthTestingView().environmentObject(app)
         }
         .onChange(of: showTesting) { _, shown in if shown { tracker.stop() } }
+        // Also its own ARSession, so this one has to release the camera.
+        .fullScreenCover(isPresented: $showBallTracker, onDismiss: { if running { tracker.start() } }) {
+            BallTrackerView().environmentObject(app)
+        }
+        .onChange(of: showBallTracker) { _, shown in if shown { tracker.stop() } }
     }
 
     /// Where the phone is standing, settable before starting — the fine-tuning lives in testing mode.
@@ -171,11 +177,19 @@ struct DepthNetsView: View {
                 .buttonStyle(.borderedProminent).tint(.green).controlSize(.large)
                 .disabled(!tracker.isSupported)
 
-                Button { showTesting = true } label: {
-                    Label("3D testing mode", systemImage: "scope").font(.caption)
+                HStack(spacing: 18) {
+                    Button { showBallTracker = true } label: {
+                        Label("Ball tracker", systemImage: "circle.dashed").font(.caption)
+                    }
+                    .tint(.cyan)
+                    .disabled(!tracker.isSupported)
+
+                    Button { showTesting = true } label: {
+                        Label("3D testing", systemImage: "scope").font(.caption)
+                    }
+                    .tint(.white)
+                    .disabled(!tracker.isSupported)
                 }
-                .tint(.white)
-                .disabled(!tracker.isSupported)
             }
         }
         .padding()
