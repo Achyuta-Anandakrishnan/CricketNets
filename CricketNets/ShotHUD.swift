@@ -179,6 +179,30 @@ struct StatusRow: View {
     }
 }
 
+// MARK: - Version
+
+/// What's actually installed, read from the built bundle.
+///
+/// Exists so a fresh install can be told apart from a stale one at a glance — on device the app
+/// icon and launch screen look identical between builds, and "did that change deploy?" is otherwise
+/// guesswork. `version` is the release; `build` moves per build of the same release.
+enum AppVersion {
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    static let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+    static var display: String { "v\(version) (\(build))" }
+}
+
+/// Small, unobtrusive build stamp for the idle screens.
+struct VersionBadge: View {
+    var body: some View {
+        Text(AppVersion.display)
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white.opacity(0.45))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(.white.opacity(0.07), in: Capsule())
+    }
+}
+
 // MARK: - Mode
 
 /// Choose which tracker drives the Nets tab, with the trade-off stated rather than buried.

@@ -185,6 +185,7 @@ struct DepthNetsView: View {
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.white.opacity(0.6))
                         .padding(.horizontal, 40)
+                    VersionBadge().padding(.top, 6)
                 }
             )
     }

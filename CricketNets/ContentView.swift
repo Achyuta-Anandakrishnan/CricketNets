@@ -134,6 +134,7 @@ struct FastNetsView: View {
                     Text("Ready for the nets").font(.title3.bold()).foregroundStyle(.white)
                     Text("Calibrate the ball, then start a match.")
                         .font(.subheadline).foregroundStyle(.white.opacity(0.6))
+                    VersionBadge().padding(.top, 6)
                 }
             )
     }
