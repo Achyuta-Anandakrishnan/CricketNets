@@ -34,11 +34,9 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(groundOffsetDeg, forKey: Key.offset) }
     }
 
-    /// Calibration flows into the detector's static config so the live speed HUD uses real numbers.
-    /// Not persisted — it's tied to where the phone is physically set up, so recalibrate each session.
-    @Published var calibration: SceneCalibration = .untuned {
-        didSet { pushCalibrationToDetector() }
-    }
+    /// Scene geometry for the fast 2D path — the views hand it to whichever tracker is running.
+    /// Not persisted: it's tied to where the phone is physically set up, so recalibrate each session.
+    @Published var calibration: SceneCalibration = .untuned
     var isCalibrated: Bool { calibration.source != .untuned }
 
     init() { load() }
@@ -58,10 +56,12 @@ final class AppState: ObservableObject {
 
     // MARK: Scoring
 
-    /// The end-to-end step for the fast 2D path: trajectory → launch vector → scored outcome.
-    /// Azimuth is 0 here — a single side-on camera can't see left/right (see `BallPhysics`).
-    func record(imagePoints: [CGPoint]) {
-        guard let analysis = ShotAnalysis.from2D(imagePoints: imagePoints, calibration: calibration) else { return }
+    /// The end-to-end step for the fast 2D path: sightings on the flight plane → launch vector →
+    /// scored outcome. Azimuth is 0 here — a single side-on camera can't see left/right (see
+    /// `BallPhysics`). The samples arrive already in metres, converted by the calibration the
+    /// camera controller was handed, so this is only the scoring half.
+    func record(planeSamples: [BallPhysics.WorldSample]) {
+        guard let analysis = ShotAnalysis.from2D(planeSamples: planeSamples) else { return }
         record(launch: analysis.launch)
     }
 
@@ -131,10 +131,5 @@ final class AppState: ObservableObject {
         if UserDefaults.standard.object(forKey: Key.offset) != nil {
             groundOffsetDeg = UserDefaults.standard.double(forKey: Key.offset)
         }
-    }
-
-    private func pushCalibrationToDetector() {
-        TrajectoryDetector.Calibration.metersPerNormalizedUnit = calibration.metersPerNormalizedUnit
-        TrajectoryDetector.Calibration.fps = calibration.fps
     }
 }

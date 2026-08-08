@@ -87,12 +87,54 @@ loosen its gate when following.
 
 ## Software issues
 
-### Fixed, and this one was the likely blocker
+### Fixed
 
-**The search window was far too small to follow a fast ball.**
+**Vision's trajectory detector is gone from the fast 2D path.**
 
-The tracker predicts where the ball will be and searches near there. But on the *first* follow after
-acquiring, no velocity has been measured yet — so the prediction was simply "where it was". Meanwhile:
+It was still driving "Start match" in Fast mode while the 3D path had already moved to colour, which
+meant the mode most people actually used was the one running the detector we'd already concluded
+couldn't answer the question. `VNDetectTrajectoriesRequest` only reports objects *already flying on a
+parabola* in front of a still camera, so it says nothing about a ball being held, thrown or struck
+until several frames of arc have accumulated — and when it says nothing there is no way to tell "I
+can't see the ball" from "the ball isn't flying yet". Both paths now run the same three pieces:
+`BallDetector` finds the ball, `BallTracker` follows it, `ShotAssembler` decides what was a shot.
+
+**Following took the biggest blob instead of the right one — this is the likely blocker.**
+
+The window that follows the ball is deliberately wide (±30% on the first follow) and its colour gate
+deliberately loose, because a struck ball is blurred on every frame including the first. But the
+detector returned the **largest** blob in that window, and at 2.5× tolerance across a third of the
+frame something is very often larger than a small blurred ball — a sleeve, a bag, a stretch of net.
+The tracker grabbed it, the size check then rejected the whole frame, and it fell back to the strict
+global scan. Every frame an independent strict scan of a blurred target: exactly the failure mode
+`% followed` was built to expose.
+
+The detector can now be asked for **the nearest blob of a plausible size** instead. Size continuity
+became part of choosing rather than a veto applied afterwards, so a distractor is stepped over
+instead of ending the frame.
+
+**The colour tolerance slider did nothing on the 3D path.** It scaled the three HSV tolerances by
+hand and left `chromaTol` alone — and chroma is the default space. Anyone who dragged it to diagnose
+a missed ball was reading a control that wasn't connected. It goes through `loosened(by:)` now, the
+same single place the ball tracker uses.
+
+**The 2D launch angle was flattened by the frame's aspect ratio.** `metersPerNormalizedUnit` is
+metres per frame *width*, but a normalized y spans the frame's *height*. Converting both axes at the
+same rate — as the old image-space fit did — under-read every elevation by ~1.78× on a portrait
+frame. The conversion now lives in one place, `SceneCalibration.planeSample`, and takes the aspect.
+
+**The 2D fit assumed sightings were one frame apart.** They aren't: the detector drops frames it
+can't find the ball in. Fast-path samples are now timestamped from the capture clock, like the 3D
+path already was, so a gap costs one sample instead of skewing the whole velocity.
+
+**Acquisition sampled too coarsely.** The full-frame stride sets the smallest ball that can ever be
+*acquired* — at stride 8 a blob needs ~9 px of radius, which a ball at the far end of LiDAR range
+doesn't have, and the first sighting of a shot is the one frame with no prediction to fall back on.
+Now 6, for ~7 px.
+
+**The search window was far too small to follow a fast ball.** (Earlier fix, kept here because it's
+the same failure surface.) On the *first* follow no velocity has been measured, so the prediction was
+simply "where it was":
 
 | Shot | Moves per frame @60fps, at 3.5 m |
 |---|---|
@@ -101,15 +143,8 @@ acquiring, no velocity has been measured yet — so the prediction was simply "w
 | 100 km/h | 13.8% |
 | 145 km/h | 20.0% |
 
-The window was sized from the ball's radius: **±5.4%**. So for anything above walking pace the
-follow always missed, the tracker fell back to the strict global scan, and velocity was never
-established — meaning it *could never begin following a fast ball at all*. Every frame was an
-independent strict scan, on a blurred target, which is the one thing that reliably fails.
-
-Now: the first follow searches a wide window (±30%), and once velocity is known the window closes to
-the ball plus a margin for acceleration. Because a wide window with a loose colour gate could grab
-the wrong thing, follows also require the blob to be a **plausible size** — a ball's apparent radius
-can't halve or double between frames, so size continuity does the discriminating that colour can't.
+The window was sized from the ball's radius: **±5.4%**. Above walking pace the follow always missed.
+Now the first follow searches ±30%, closing down once velocity is known.
 
 ### Still open, in rough order of value
 
@@ -118,21 +153,20 @@ Portrait means the capture's *short* axis (1440 px) spans the world horizontally
 view against landscape's 65°. Unlocking landscape is free frames. `project.yml` pins
 `UISupportedInterfaceOrientations` to portrait.
 
-**Acquisition uses a coarse stride.**
-The global scan samples every 8th pixel. At 4.5 m the ball is only 3 cells across, so about 7 mask
-pixels against a minimum of 4 — marginal. The first sighting of a shot is the hardest one to get,
-and it's the one using the coarsest scan.
-
 **`minSamplesPerShot` is 3.**
 It could be 2 with a velocity-only fit (dropping the gravity correction, which over 0.08 s is
-negligible anyway). Worth doing if frames stay scarce.
+negligible anyway). Worth doing if frames stay scarce. The 2D fit already accepts 2; the assembler
+is what still asks for 3.
 
 **Depth may lag a fast ball.**
 LiDAR depth is temporally smoothed. A ball crossing quickly may get depth belonging to what was
 behind it a moment ago. Unverified — the ball tracker's LiDAR-vs-ball-size comparison is the way to
 check: if they diverge as the ball speeds up, this is real.
 
----
+**`MotionMasker` and `SampleBuffer` are now unreferenced.**
+Both existed to feed difference images to the stateful Vision request. They still compile and are
+left in place because motion masking is the plan of record for a white ball, but a colour-tracking
+version would difference pixel buffers directly rather than build `CMSampleBuffer`s.
 
 ## Diagnosing on device
 
@@ -142,8 +176,12 @@ Each screen isolates one stage, so a failure can be located rather than guessed 
 |---|---|---|
 | **Ball tracker** | Can we see the ball at all? | Ring locks on; LiDAR and ball-size distances agree |
 | **Accuracy** | Are the numbers real? | Gravity ≈ 9.81 from a 1.5 m+ drop |
+| **Testing (fast 2D)** | Is the fast path healthy? | High **% followed**; a shot speed that looks right |
 | **3D testing** | Is the funnel healthy? | `ball seen → 3D` close together; high **% followed** |
 | **Limits** | What can the hardware do? | ARKit vs AVFoundation max fps |
+
+Both testing screens now report the same funnel because both paths run the same detector, so a
+result on one transfers to the other — which was not true while Fast mode ran on Vision.
 
 **The single most diagnostic number is "% followed, not re-scanned"** in 3D testing. High means
 continuity is working and shots should hold together. Low means every frame is an independent strict
@@ -184,8 +222,10 @@ question.
 ## Honest summary
 
 The physics, geometry and scale are **verified correct** by the gravity measurement. Detection
-**works** on a slow ball. What was broken was the tracker's ability to follow a fast one, and that
-was a sizing bug rather than anything fundamental.
+**works** on a slow ball. What was broken was the tracker's ability to follow a fast one — first
+because the search window was too small to reach it, then because the wrong blob inside that window
+was being chosen. Both are selection bugs rather than anything fundamental. Fast mode was
+additionally still on Vision, so none of the colour work reached the mode being used.
 
 What remains genuinely hard is the frame budget. At 60 fps a hard shot gives 3–6 chances and every
 one has to land. Whether that's workable depends on a question the Limits screen answers: **is there

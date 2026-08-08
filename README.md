@@ -10,9 +10,17 @@ This milestone proves the hard part works before we build the field + scoring on
 | File | Role |
 |------|------|
 | `CricketNetsApp.swift` | App entry point |
-| `CameraController.swift` | AVFoundation capture at 120fps, feeds frames to the detector |
-| `TrajectoryDetector.swift` | Wraps `VNDetectTrajectoriesRequest` (Apple's parabolic-path detector) |
-| `ContentView.swift` | Camera preview + live trajectory overlay + speed HUD |
+| `CameraController.swift` | AVFoundation capture at 120fps; finds the ball in each frame by colour |
+| `BallDetector.swift` | Per-frame colour blob detection — where is the ball in *this* frame |
+| `BallTracker.swift` | Frame-to-frame continuity: follow the ball rather than re-scan for it |
+| `ShotAssembler.swift` | Decides which runs of sightings were a struck shot |
+| `ContentView.swift` | Camera preview + live ball overlay + speed HUD |
+
+> **Both tracking paths run the same three pieces.** `VNDetectTrajectoriesRequest` used to drive the
+> fast 2D path and has been removed entirely: it only reports objects *already flying on a parabola*
+> in front of a still camera, so it stayed silent for most of a net session and gave no way to tell
+> "can't see the ball" from "ball isn't flying yet". Colour detection answers the smaller question
+> honestly, and makes the Ball Tracker screen a true diagnostic for what happens in a match.
 
 ## Setup in Xcode (10 min)
 
@@ -27,14 +35,18 @@ This milestone proves the hard part works before we build the field + scoring on
 5. **Run on device** — the camera and high-frame-rate capture do **not** work in the Simulator, so plug in the iPhone 16 Pro and run there.
 
 > **Frame rate:** the code targets **120 fps**, not 240 (`CameraController.targetFPS`). 240 combined with
-> per-frame Vision overheated the phone and got the app killed for memory; 120 is still plenty to catch a
+> per-frame detection overheated the phone and got the app killed for memory; 120 is still plenty to catch a
 > ball. The device picks the fastest format it supports up to that.
 
 ## How to test it
 
-- Put the phone on a **tripod**, side-on to the net (trajectory detection needs a stable camera).
+- **Calibrate the ball first.** Colour tracking has nothing to look for without it, so the app finds
+  nothing at all until you do — deliberately, rather than tracking whatever moves.
+- Put the phone on a **tripod**, side-on to the net. A moving camera drags the whole frame past the
+  detector and breaks the between-frames prediction.
 - Good, even lighting — a fast dark ball in dim light is the enemy.
-- Hit or throw a ball across the frame. The green path should snap onto it and `TRACKING` lights up.
+- Hit or throw a ball across the frame. A ring should lock onto it, a green trail follows, and
+  `TRACKING` lights up once the ball is moving faster than the shot gate.
 
 ## Known limits (by design at this stage)
 
@@ -44,13 +56,24 @@ This milestone proves the hard part works before we build the field + scoring on
 
 ## Tuning knobs if detection is flaky
 
-In `TrajectoryDetector.swift` (current defaults in brackets):
-- `defaultMinRadius` / `defaultMaxRadius` [0.003 / 0.20] — the size gate used before a ball is calibrated. Widen if the ball isn't picked up, narrow if it locks onto the wrong thing. Once you calibrate a ball, `BallProfile.minRadius` / `maxRadius` [0.005 / 0.06] replace these.
-- `trajectoryLength` [5] — raise for steadier (but slower-to-appear) paths.
-- `minTrajectoryMotion` [0.03] — how far a path must span, as a fraction of the frame, to count as a shot.
-- `minConfidence` [0.3] — lower to catch more, raise to reject noise.
+Two of these are live sliders in **Testing mode**, which is the faster way to find the right value —
+watch `% followed` while someone hits a few.
 
-The last two are also live sliders in **Testing mode**, which is the faster way to tune them.
+- **How fussy about colour** (`CameraController.colourTolerance`, [1.0]) — multiplies the calibrated
+  tolerances. Drag right until the ring locks on. If it never does at any setting, the saved colour
+  is wrong for this light: recalibrate rather than keep widening.
+- **How hard a hit counts as a shot** (`ShotAssembler.minShotSpeed`, [4.0 m/s]) — below this, movement
+  is a ball being carried back rather than a shot.
+
+In `BallTracker.swift` (defaults in brackets):
+- `bootstrapHalfWidth` [0.30] — how wide to search on the first follow, before any velocity is known.
+  A struck ball moves 14–20% of the view between frames at 60 fps, so this has to be large.
+- `trackingTolerance` [2.5] — how much to relax the colour gate inside the predicted window. Safe to
+  be generous: position and size are doing the discriminating there, not colour.
+- `acquireStep` [6] — full-frame sampling stride. This sets the smallest ball that can ever be
+  *acquired*: a blob needs 4 samples on it, so the radius must be at least ~7 px. Lower it if the
+  ball is never picked up at range; it costs frame time.
+- `maxCoastSeconds` [0.15] — how long a lock survives with no sighting before re-acquiring.
 
 ## Milestone 2 — Calibration + LiDAR (added)
 
@@ -67,7 +90,7 @@ Turns the green line into real numbers: **speed, launch angle, and left/right az
 **High-frame-rate capture and LiDAR can't run together** — ARKit scene depth caps at 60fps. So on the fast path LiDAR is used as a short **calibration step**, not for live tracking:
 
 1. Aim the phone down the net, tap **Depth** → `LiDARCalibrator` reads the distance to the ball's flight plane and derives meters-per-frame-width.
-2. That `SceneCalibration` is held by `AppState`, which pushes it into `TrajectoryDetector.Calibration` so the fast **120fps 2D tracker** from M1 reports real speed.
+2. That `SceneCalibration` is handed to `CameraController`, which uses it to place each sighting on the flight plane in metres, so the fast **120fps 2D tracker** from M1 reports real speed.
 3. Every tracked shot now reports real speed + elevation, and `BallPhysics` projects a landing point.
 
 Two ways to calibrate:
@@ -81,7 +104,9 @@ Two ways to calibrate:
 - **Verify the metric scale against a tape measure once** — the orientation reconciliation between the ARKit calibration pass (landscape) and the tracking pass (portrait) is the one number worth sanity-checking on device. Flagged in `LiDARCalibrator.makeCalibration`.
 
 ### Wiring it in
-`CalibrationStore` writes the calibrated scale into the M1 detector's static config, so the existing speed HUD "just works" once calibrated. To show launch angle + landing, call `ShotAnalysis.from2D(imagePoints:calibration:)` with the detector's `trajectoryPoints` and display `launch.elevationDeg` / `landing.carry`.
+`SceneCalibration.planeSample(at:frameAspect:time:)` is where an image position becomes a measurement, and it is the only place the geometry lives. Note the `frameAspect` argument: `metersPerNormalizedUnit` is metres per frame *width*, but a normalized y spans the frame's *height*, so converting both axes at the same rate — as the old image-space fit did — flattened every launch angle by the aspect ratio (~1.78x on a portrait frame).
+
+From there `ShotAnalysis.from2D(planeSamples:)` gives `launch.elevationDeg` / `landing.carry`.
 
 ## Milestone 3 — Field setup + scoring (added)
 
@@ -106,8 +131,8 @@ The **Field** tab (`ScoringDemoView`) runs in the **Simulator**. Drag fielders a
 This two-phase model is what lets boundaries score correctly — most 4s are hit along the ground and *roll* to the rope, not cleared on the full. All thresholds live in `ScoringEngine.Params` — tune them to taste (a lower `rollDecel` = faster outfield = more boundaries).
 
 ### The full pipeline is now connected
-`camera → VNDetectTrajectories → SceneCalibration → BallPhysics.launchVector → ScoringEngine → ScoreResult`.
-To go fully live, feed the detector's `trajectoryPoints` + the current `SceneCalibration` into `BallPhysics.launchVector(imagePoints:calibration:)`, then hand that `LaunchVector` to `ScoringEngine.evaluate` — same call the demo slider already makes.
+`camera → BallDetector → BallTracker → SceneCalibration.planeSample → ShotAssembler → BallPhysics.launchVector → ScoringEngine → ScoreResult`.
+The 3D path is the same chain with LiDAR unprojection standing in for `planeSample`, which is why a fix to detection or following lands on both.
 
 ## Live path connected (end-to-end)
 
@@ -119,8 +144,8 @@ The camera now scores real shots automatically against the field you set.
 | `CalibrationView.swift` | LiDAR aim-and-capture screen (the M2 calibration step, as UI) |
 
 **How it flows:**
-1. `CameraController` debounces the trajectory — when a shot's path stops updating for 0.4 s, it fires `onShotCompleted` once.
-2. `AppState.record` runs `ShotAnalysis.from2D → ScoringEngine.evaluate` and publishes the result.
+1. `ShotAssembler` decides a run of sightings was a shot (speed between them clears `minShotSpeed`), and `CameraController` fires `onShotCompleted` once the ball goes quiet for `settleSeconds`.
+2. `AppState.record(planeSamples:)` runs `ShotAnalysis.from2D → ScoringEngine.evaluate` and publishes the result.
 3. The **Nets** tab shows the outcome banner (SIX / OUT / runs) over the live view.
 
 The **field you drag in the Field tab is the field the camera scores against** — they share `AppState.field`. Tap **Calibrate** on the Nets tab to run the LiDAR step; the status dot turns green and speeds become real.
@@ -129,13 +154,14 @@ The **field you drag in the Field tab is the field the camera scores against** �
 
 ## Ball calibration (rejecting non-ball motion)
 
-`VNDetectTrajectoriesRequest` tracks *any* parabolic motion of roughly the right size — hands, the bat, people in the background. To lock onto the actual ball, tap **Ball** on the Nets tab and hold the ball in the ring:
+Colour **is** the detector now, so this step is no longer a filter on top of tracking — it is what tracking looks for, and nothing is found at all until it's done. Tap **Ball** on the Nets tab and hold the ball in the ring:
 
 - `BallProfile` / `BallColor` (`BallProfile.swift`) sample the ball's HSV color from the frame centre.
-- `TrajectoryDetector` then **color-gates** every detection: it reads the pixels at each candidate trajectory's position and drops anything that isn't the ball's color (`profile.matches`). White balls fall back to brightness matching since their hue is unstable.
-- Status shows on the Nets tab: **"Tracking the ball only"** (green) vs **"Tracking everything"** (orange).
+- `BallDetector` scans each frame for the largest connected blob matching that colour (`profile.matches`), reporting its centre **and its apparent size** — which gives a distance estimate independent of LiDAR.
+- Matching happens in **luma-normalised chroma** by default, not HSV: dividing Cb/Cr by luma means the same ball in sun and in shade lands on the same point, which HSV's brightness box does not.
+- Status shows on the Nets tab: **"Tracking the ball's colour"** (green) vs **"No ball colour — nothing will be tracked"** (orange).
 
-Tune `hueTol` / `satTol` / `valTol` in `BallProfile` if it's too strict (misses the ball) or too loose (still catches noise).
+Use the tolerance slider in Testing mode rather than editing `chromaTol` / `hueTol` — it multiplies whatever was calibrated, in whichever colour space is active.
 
 ## 3D tracking — azimuth becomes a measurement (added)
 
@@ -151,14 +177,14 @@ depth for frames and the depth path trades frames for depth.
 
 | File | Role |
 |------|------|
-| `DepthTrajectoryTracker.swift` | ARKit session + Vision, unprojecting each trajectory point through the depth map into world space |
+| `DepthTrajectoryTracker.swift` | ARKit session + colour detection, unprojecting each sighting through the depth map into world space |
 | `ShotHUD.swift` | Shared live readouts — mini field, metric pills, tracking badge, result banner |
 | `DepthNetsView.swift` | The 3D mode screen |
 
 ### How it works
-1. ARKit delivers a frame with `sceneDepth`. `VNDetectTrajectoriesRequest` runs on the captured image.
-2. The newest point of the winning trajectory is looked up in **that same frame's** depth map, so
-   every 3D point is unprojected with its own depth — no stale-depth mismatch.
+1. ARKit delivers a frame with `sceneDepth`. `BallTracker` finds the ball in the captured image.
+2. That sighting is looked up in **that same frame's** depth map, so every 3D point is unprojected
+   with its own depth — no stale-depth mismatch.
 3. Depth → camera space → ARKit world space. The samples are **timestamped**, because frames where
    the ball wasn't detected (or where LiDAR wasn't confident) are simply missing.
 4. When points stop arriving, a least-squares fit across the samples gives velocity, with a gravity

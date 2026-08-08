@@ -181,6 +181,82 @@ final class BallTrackerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(followedCount, 6, "should follow rather than re-scan each frame")
     }
 
+    // MARK: Choosing between blobs
+
+    /// A frame with a small ball and a large distractor of the same colour.
+    private func frameWithDistractor(ball: CGPoint, ballRadius: Double,
+                                     distractor: CGPoint, distractorRadius: Double) -> CVPixelBuffer {
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
+                            [kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()] as CFDictionary,
+                            &pb)
+        let buffer = pb!
+        CVPixelBufferLockBaseAddress(buffer, [])
+        let base = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let onBall = hypot(Double(x) - ball.x * Double(width),
+                                   Double(y) - ball.y * Double(height)) <= ballRadius
+                let onDistractor = hypot(Double(x) - distractor.x * Double(width),
+                                         Double(y) - distractor.y * Double(height)) <= distractorRadius
+                let c = (onBall || onDistractor) ? blue : (30, 30, 30)
+                let p = y * rowBytes + x * 4
+                base[p] = c.2; base[p + 1] = c.1; base[p + 2] = c.0; base[p + 3] = 255
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        return buffer
+    }
+
+    func testFollowingPrefersTheNearestPlausibleBlobOverTheBiggestOne() throws {
+        // The bug this guards, and the reason following kept failing on real shots. The bootstrap
+        // window is deliberately wide and the colour gate deliberately loose, so it routinely
+        // contains something bigger than the ball — a sleeve, a bag, a stretch of netting. Taking
+        // the largest blob grabbed that, the size check then threw the whole frame away, and the
+        // tracker fell back to a strict global scan on a motion-blurred target every single frame.
+        var tracker = BallTracker()
+        let profile = blueProfile()
+
+        _ = tracker.track(in: frame(at: CGPoint(x: 0.30, y: 0.5), radius: 10, ball: blue),
+                          profile: profile, time: 0)
+
+        // Both sit inside the wide bootstrap window, far enough apart not to merge into one blob.
+        // The distractor is three times the ball's size, so "largest" would take it.
+        let cluttered = frameWithDistractor(ball: CGPoint(x: 0.42, y: 0.5), ballRadius: 10,
+                                            distractor: CGPoint(x: 0.15, y: 0.5), distractorRadius: 30)
+        let hit = try XCTUnwrap(tracker.track(in: cluttered, profile: profile, time: 1.0 / 60))
+
+        XCTAssertTrue(hit.followed, "the ball is right there — this must not fall back to a scan")
+        XCTAssertEqual(hit.detection.center.x, 0.42, accuracy: 0.04,
+                       "should step over the bigger blob to reach the ball")
+    }
+
+    func testDetectionCanBeAskedForTheBlobNearestAPoint() throws {
+        let buffer = frameWithDistractor(ball: CGPoint(x: 0.25, y: 0.5), ballRadius: 10,
+                                         distractor: CGPoint(x: 0.7, y: 0.5), distractorRadius: 30)
+        let largest = try XCTUnwrap(BallDetector.detect(in: buffer, profile: blueProfile(), step: 3))
+        XCTAssertEqual(largest.center.x, 0.7, accuracy: 0.05, "by default, the biggest wins")
+
+        let nearest = try XCTUnwrap(
+            BallDetector.detect(in: buffer, profile: blueProfile(), step: 3,
+                                preferring: .nearest(to: CGPoint(x: 0.25, y: 0.5), radii: 0...1))
+        )
+        XCTAssertEqual(nearest.center.x, 0.25, accuracy: 0.05)
+    }
+
+    func testASizeBandRulesOutTheWrongObjectEvenWhenItIsCloser() {
+        // Position alone isn't enough: something the wrong size sitting right on the prediction is
+        // not the ball, and accepting it would hand the tracker a lock it can never recover from.
+        let buffer = frameWithDistractor(ball: CGPoint(x: 0.5, y: 0.5), ballRadius: 40,
+                                         distractor: CGPoint(x: 0.5, y: 0.5), distractorRadius: 0)
+        XCTAssertNil(BallDetector.detect(in: buffer, profile: blueProfile(), step: 3,
+                                         preferring: .nearest(to: CGPoint(x: 0.5, y: 0.5),
+                                                              radii: 0.01...0.05)),
+                     "a blob far outside the plausible size band is not the ball")
+    }
+
     // MARK: Profile loosening
 
     func testLooseningWidensToleranceWithoutMovingTheColour() {

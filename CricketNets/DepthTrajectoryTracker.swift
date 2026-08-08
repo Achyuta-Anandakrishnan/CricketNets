@@ -1,5 +1,4 @@
 import ARKit
-import Vision
 import CoreVideo
 import Combine
 import simd
@@ -56,7 +55,7 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     /// Distance (m) the depth map reported at the last detected ball position.
     @Published private(set) var lastBallDistance: Double = 0
     @Published private(set) var depthQuality: DepthQuality = .noReading
-    /// Where the ball was last seen, Vision-normalized with a top-left origin. Drives the testing
+    /// Where the ball was last seen, normalized with a top-left origin. Drives the testing
     /// overlay so you can see whether the depth patch is actually landing on the ball.
     @Published private(set) var lastBallPoint: CGPoint?
     /// The full depth lookup behind the last frame — patch size, confident pixel count, distance.
@@ -148,14 +147,10 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
     }
 
     private func pushProfile() {
-        guard var p = baseProfile else {
-            arQueue.async { [weak self] in self?.ballProfile = nil }
-            return
-        }
-        p.hueTol = min(0.5, p.hueTol * colourTolerance)
-        p.satTol = min(1.0, p.satTol * colourTolerance)
-        p.valTol = min(1.0, p.valTol * colourTolerance)
-        let scaled = p
+        // Scale through `loosened`, not by hand. Widening only the HSV tolerances left the chroma
+        // radius untouched — and chroma is the default space — so dragging the tolerance slider on
+        // the 3D testing screen did nothing at all, while plainly appearing to.
+        let scaled = baseProfile?.loosened(by: colourTolerance)
         arQueue.async { [weak self] in self?.ballProfile = scaled }
     }
 
@@ -179,7 +174,7 @@ final class DepthTrajectoryTracker: NSObject, ObservableObject {
             .max(by: { $0.framesPerSecond < $1.framesPerSecond }) {
             config.videoFormat = fastest
         }
-        session.delegateQueue = arQueue   // keep Vision off the main thread
+        session.delegateQueue = arQueue   // keep per-frame scanning off the main thread
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
         isRunning = true

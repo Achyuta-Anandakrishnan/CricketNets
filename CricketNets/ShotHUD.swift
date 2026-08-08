@@ -183,8 +183,8 @@ struct StatusRow: View {
 
 /// A slider that says what it does and what its current setting means.
 ///
-/// The tuning knobs are internal thresholds — a normalized path length, a Vision confidence, a
-/// tolerance multiplier — and their raw values ("0.03") say nothing about what will happen if you
+/// The tuning knobs are internal thresholds — a colour tolerance multiplier, a shot-speed gate, an
+/// aim offset — and their raw values ("0.03") say nothing about what will happen if you
 /// drag them. This shows a plain-language reading of the current value plus which way to go when
 /// something is wrong, so the screen can be used without knowing the implementation.
 struct TunableSlider: View {
@@ -240,20 +240,6 @@ enum TuningWords {
         case ..<3:    return "Relaxed"
         case ..<5:    return "Loose"
         default:      return "Almost anything"
-        }
-    }
-
-    /// Minimum path length, as a fraction of the frame.
-    static func travel(_ fraction: Double) -> String {
-        fraction < 0.005 ? "any movement" : "crosses \(Int(fraction * 100))% of view"
-    }
-
-    /// Vision's confidence threshold.
-    static func certainty(_ value: Double) -> String {
-        switch value {
-        case ..<0.2:  return "\(Int(value * 100))% — accept almost all"
-        case ..<0.5:  return "\(Int(value * 100))% — balanced"
-        default:      return "\(Int(value * 100))% — only sure ones"
         }
     }
 

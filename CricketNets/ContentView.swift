@@ -42,13 +42,10 @@ struct FastNetsView: View {
         ZStack {
             if matchRunning {
                 CameraPreview(session: camera.session).ignoresSafeArea()
-                GeometryReader { geo in
-                    TrajectoryPath(points: camera.trajectoryPoints, size: geo.size)
-                        .stroke(Color.green, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                        .shadow(color: .green.opacity(0.8), radius: 6)
-                }
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+                BallOverlay(detection: camera.detection,
+                            trail: camera.trail,
+                            followed: camera.wasFollowed,
+                            bufferSize: camera.frameSize)
             } else {
                 idleBackground
             }
@@ -69,10 +66,13 @@ struct FastNetsView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: camera.cooldownRemaining)
         .onAppear {
-            camera.onShotCompleted = { [weak app] points in app?.record(imagePoints: points) }
+            camera.onShotCompleted = { [weak app] samples in app?.record(planeSamples: samples) }
             camera.ballProfile = app.ballProfile
+            camera.calibration = app.calibration
             if matchRunning { camera.start() }
         }
+        .onChange(of: app.calibration) { _, new in camera.calibration = new }
+        .onChange(of: app.ballProfile) { _, new in camera.ballProfile = new }
         .onDisappear { camera.stop() }
         // LiDAR needs the back camera to itself, so pause capture while the Depth sheet is up.
         .sheet(isPresented: $showCalibration, onDismiss: { if matchRunning { camera.start() } }) {
@@ -114,6 +114,7 @@ struct FastNetsView: View {
 
     private func startMatch() {
         camera.ballProfile = app.ballProfile
+        camera.calibration = app.calibration
         matchRunning = true
         camera.start()
     }
@@ -208,8 +209,8 @@ struct FastNetsView: View {
             HStack(spacing: 8) {
                 BallSwatch(profile: app.ballProfile, size: 16)
                 StatusRow(ok: app.isBallCalibrated,
-                          text: app.isBallCalibrated ? "Tracking the ball only"
-                                                     : "Tracking everything — calibrate the ball",
+                          text: app.isBallCalibrated ? "Tracking the ball's colour"
+                                                     : "No ball colour — nothing will be tracked",
                           button: "Ball") { showBallCalibration = true }
             }
 
@@ -236,19 +237,68 @@ struct FastNetsView: View {
     }
 }
 
-/// Draws the trajectory. Vision points are normalized with origin at BOTTOM-left;
-/// SwiftUI's origin is TOP-left, so y is flipped here.
-private struct TrajectoryPath: Shape {
-    let points: [CGPoint]
-    let size: CGSize
+/// Maps a normalized capture-buffer point (top-left origin) onto the preview.
+///
+/// The preview draws with `resizeAspectFill`, which scales the buffer to cover the view and crops
+/// the overflow. Multiplying a normalized point by the view's size ignores that crop, so an overlay
+/// drifts further from the thing it's tracking the nearer the edge it gets — most visible exactly
+/// where a shot leaves the frame.
+struct PreviewMapping {
+    let bufferSize: CGSize
+    let viewSize: CGSize
 
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        guard points.count > 1 else { return path }
-        let mapped = points.map { CGPoint(x: $0.x * size.width, y: (1 - $0.y) * size.height) }
-        path.move(to: mapped[0])
-        for p in mapped.dropFirst() { path.addLine(to: p) }
-        return path
+    private var scale: CGFloat {
+        guard bufferSize.width > 0, bufferSize.height > 0 else { return 1 }
+        return max(viewSize.width / bufferSize.width, viewSize.height / bufferSize.height)
+    }
+
+    func point(_ p: CGPoint) -> CGPoint {
+        let filled = CGSize(width: bufferSize.width * scale, height: bufferSize.height * scale)
+        return CGPoint(x: (viewSize.width - filled.width) / 2 + p.x * filled.width,
+                       y: (viewSize.height - filled.height) / 2 + p.y * filled.height)
+    }
+
+    /// A length given as a fraction of the buffer's WIDTH (the units `radiusNormalized` uses).
+    func length(_ fractionOfWidth: Double) -> CGFloat {
+        fractionOfWidth * bufferSize.width * scale
+    }
+}
+
+/// A ring where the ball was found, trailing the sightings that led to it.
+///
+/// The trail replaces the parabola the Vision path used to draw. It's the honest version of the same
+/// picture: these are the frames the ball was actually seen in, so gaps in it are gaps in the data.
+struct BallOverlay: View {
+    let detection: BallDetector.Detection?
+    let trail: [CGPoint]
+    let followed: Bool
+    let bufferSize: CGSize
+
+    var body: some View {
+        GeometryReader { geo in
+            let map = PreviewMapping(bufferSize: bufferSize, viewSize: geo.size)
+            ZStack {
+                if trail.count > 1 {
+                    Path { path in
+                        let points = trail.map(map.point)
+                        path.move(to: points[0])
+                        for p in points.dropFirst() { path.addLine(to: p) }
+                    }
+                    .stroke(Color.green.opacity(0.8),
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    .shadow(color: .green.opacity(0.7), radius: 6)
+                }
+                if let detection {
+                    let radius = max(14, map.length(detection.radiusNormalized))
+                    Circle()
+                        .stroke(followed ? Color.green : Color.cyan, lineWidth: 3)
+                        .frame(width: radius * 2, height: radius * 2)
+                        .position(map.point(detection.center))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
     }
 }
 

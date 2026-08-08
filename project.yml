@@ -24,8 +24,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.CricketNets
         # Bump MARKETING_VERSION per release, CURRENT_PROJECT_VERSION per build you install.
         # Both are shown on the Nets idle screen so you can confirm what's actually on the phone.
-        MARKETING_VERSION: "0.4"
-        CURRENT_PROJECT_VERSION: "13"
+        MARKETING_VERSION: "0.5"
+        CURRENT_PROJECT_VERSION: "14"
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_NSCameraUsageDescription: "Track the ball during net practice."
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES

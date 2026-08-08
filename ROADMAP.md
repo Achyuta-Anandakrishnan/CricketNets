@@ -1,7 +1,7 @@
 # CricketNets — Roadmap
 
 ## Done
-- **M1 — Live trajectory + speed.** 120 fps capture, `VNDetectTrajectoriesRequest`, on-screen path.
+- **M1 — Live tracking + speed.** 120 fps capture, per-frame colour detection, on-screen path.
 - **M2 — Calibration.** LiDAR/reference scene calibration; launch vector (speed, angle, azimuth).
 - **M3 — Field + scoring.** Draggable field, physics scoring (drag + bounce + roll), wagon wheel, stats.
 - **Live path wired end-to-end.** Camera → calibration → scoring → result banner, automatically.
@@ -25,9 +25,9 @@ The app works end-to-end but is buggy on device. Priorities, in order:
    - *Likely cause B (to confirm on device):* Ball calibration hang while sampling the frame. Needs a
      repro — which button froze, and did the preview freeze or the whole UI?
 2. **Tracking noise.** Layered filters now applied — verify on device:
-   - **Motion masking** (`MotionMasker`): frame differencing so the detector only sees moving pixels.
-   - Longer parabolas (trajectoryLength 8), a motion/displacement gate, and a tight multi-point color gate.
-   - Tuning dials if still off: `TrajectoryDetector.minTrajectoryMotion`, `minConfidence`, and
+   - **Motion masking** (`MotionMasker`, currently unreferenced): frame differencing so the detector only sees moving pixels. Needed for a white ball, which has almost no chroma to match on.
+   - A size gate against depth: we know the ball's real diameter and its distance, so we can compute how large it *should* look and reject anything else.
+   - Tuning dials if still off: `CameraController.colourTolerance`, `ShotAssembler.minShotSpeed`, and
      `MotionMasker.contrast` / `brightness`.
 3. **Session lifecycle.** Verify camera start/stop across tab switches, backgrounding, and sheets
    doesn't leak or double-configure.
