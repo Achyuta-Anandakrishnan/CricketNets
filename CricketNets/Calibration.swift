@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import simd
 
 /// Standard cricket dimensions (meters) — used as real-world references for calibration.
 enum CricketConstants {
@@ -57,5 +58,27 @@ struct SceneCalibration: Equatable {
             fps: fps,
             source: .reference
         )
+    }
+
+    /// Place a ball sighting on the flight plane, in metres.
+    ///
+    /// The fast path sees an image and nothing else, so this is where an image position becomes a
+    /// measurement: x runs along the ground, y is height above it, and z is fixed at zero because a
+    /// single side-on camera cannot observe depth (see `BallPhysics.launchVector(planeSamples:)`).
+    ///
+    /// - Parameter p: normalized detection centre, **top-left origin**, as `BallDetector` reports it.
+    /// - Parameter frameAspect: the capture buffer's height ÷ width.
+    ///
+    ///   This parameter is the whole reason the function exists. `metersPerNormalizedUnit` is metres
+    ///   per frame *width*, but a normalized y of 1.0 spans the frame's *height* — so on a 9:16
+    ///   portrait frame a given vertical movement is worth 1.78× as many metres as the same number
+    ///   horizontally. Converting both axes at the same rate, as the old image-space fit did,
+    ///   flattened every launch angle by exactly that ratio.
+    func planeSample(at p: CGPoint, frameAspect: Double, time: TimeInterval) -> BallPhysics.WorldSample {
+        let x = (Double(p.x) - 0.5) * metersPerNormalizedUnit
+        // Image y grows downward and height grows upward, hence the flip. The camera looks out from
+        // `cameraHeight`, so the middle of the frame is that high off the ground.
+        let y = cameraHeight + (0.5 - Double(p.y)) * metersPerNormalizedUnit * frameAspect
+        return BallPhysics.WorldSample(position: simd_float3(Float(x), Float(y), 0), time: time)
     }
 }

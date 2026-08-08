@@ -186,8 +186,8 @@ enum BallPhysics {
 
     // MARK: 2D path (fast tracker + calibration; azimuth is NOT observable — see below)
 
-    /// Lift a 2D image trajectory (Vision normalized points, bottom-left origin) into a launch
-    /// vector using the scene calibration.
+    /// Estimate the launch from sightings confined to the **image plane**: metric x running along
+    /// the ground, y measured up from it, and z unused. `SceneCalibration.planeSample` builds them.
     ///
     /// The setup this assumes is the one the README asks for: the phone side-on to the flight, so
     /// the image's horizontal axis runs down the ground and its vertical axis is height. Given that:
@@ -200,46 +200,31 @@ enum BallPhysics {
     ///   horizontal drift says which way *down the ground*, not which side of the wicket. It is
     ///   reported as 0 (straight) rather than guessed. Use `from3D` (LiDAR) for real left/right.
     ///
-    /// Velocity comes from a least-squares fit across the whole trajectory rather than the first two
-    /// points, so a single noisy detection no longer decides the shot.
-    static func launchVector(imagePoints: [CGPoint], calibration c: SceneCalibration) -> LaunchVector? {
-        guard imagePoints.count >= 2, c.fps > 0 else { return nil }
+    /// Samples carry their own timestamps rather than being assumed one frame apart, which matters
+    /// because the colour tracker drops any frame it can't find the ball in — the same reason the 3D
+    /// path is timestamped. A dropped frame now costs one sample instead of skewing the whole fit.
+    static func launchVector(planeSamples samples: [WorldSample]) -> LaunchVector? {
+        guard samples.count >= 2 else { return nil }
+        let t0 = samples[0].time
+        let times = samples.map { $0.time - t0 }
+        guard let last = times.last, last > 0 else { return nil }
 
-        // Mean image-plane velocity over the tracked window, in meters/second at the flight plane.
-        let (slopeX, slopeY) = meanVelocityPerSecond(imagePoints, fps: c.fps)
-        let vx = slopeX * c.metersPerNormalizedUnit
-        var vy = slopeY * c.metersPerNormalizedUnit
+        guard
+            let fitX = linearFit(times: times, values: samples.map { Double($0.position.x) }),
+            let fitY = linearFit(times: times, values: samples.map { Double($0.position.y) })
+        else { return nil }
 
-        // A linear fit of y(t) returns the *mean* vertical velocity, but gravity has already been
-        // pulling the ball down across the window. For y = vy₀·t − ½g·t² the mean slope over [0, T]
-        // is vy₀ − g·T/2, so add that back to recover the velocity at the first tracked point.
-        let window = Double(imagePoints.count - 1) / c.fps
-        vy += g * window / 2
+        let vx = fitX.slope
+        // A linear fit of y(t) returns the mean vertical velocity, but gravity has been pulling the
+        // ball down across the window. `accelWeight` recovers the velocity at the first sighting.
+        let vy = fitY.slope + g * fitY.accelWeight / 2
 
         let speed = (vx * vx + vy * vy).squareRoot()
         guard speed > 0 else { return nil }
-        let elevation = atan2(vy, abs(vx))
-        return LaunchVector(speed: speed, elevation: elevation, azimuth: 0, height: c.cameraHeight)
-    }
-
-    /// Least-squares slope of x(t) and y(t) across the detected points, in normalized units per
-    /// second. Vision reports one point per analyzed frame, so sample i sits at t = i / fps.
-    private static func meanVelocityPerSecond(_ points: [CGPoint], fps: Double) -> (Double, Double) {
-        let n = Double(points.count)
-        let meanT = (n - 1) / 2                    // in frames
-        let meanX = points.reduce(0.0) { $0 + Double($1.x) } / n
-        let meanY = points.reduce(0.0) { $0 + Double($1.y) } / n
-
-        var stt = 0.0, stx = 0.0, sty = 0.0
-        for (i, p) in points.enumerated() {
-            let dt = Double(i) - meanT
-            stt += dt * dt
-            stx += dt * (Double(p.x) - meanX)
-            sty += dt * (Double(p.y) - meanY)
-        }
-        guard stt > 0 else { return (0, 0) }
-        // Slope is per frame; × fps converts to per second.
-        return (stx / stt * fps, sty / stt * fps)
+        return LaunchVector(speed: speed,
+                            elevation: atan2(vy, abs(vx)),
+                            azimuth: 0,
+                            height: max(0, Double(samples[0].position.y)))
     }
 
     // MARK: Projection
@@ -268,8 +253,8 @@ struct ShotAnalysis {
     let launch: LaunchVector
     let landing: LandingPoint
 
-    static func from2D(imagePoints: [CGPoint], calibration: SceneCalibration) -> ShotAnalysis? {
-        guard let launch = BallPhysics.launchVector(imagePoints: imagePoints, calibration: calibration) else { return nil }
+    static func from2D(planeSamples: [BallPhysics.WorldSample]) -> ShotAnalysis? {
+        guard let launch = BallPhysics.launchVector(planeSamples: planeSamples) else { return nil }
         return ShotAnalysis(launch: launch, landing: BallPhysics.land(launch))
     }
 

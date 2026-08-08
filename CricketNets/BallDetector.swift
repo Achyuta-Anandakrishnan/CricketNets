@@ -55,7 +55,23 @@ enum BallDetector {
         var looksLikeABall: Bool { frameCoverage < 0.25 && concentration > 0.3 }
     }
 
-    /// Scan for the largest blob of ball-coloured pixels.
+    /// Which of the ball-coloured blobs in the search area to return.
+    ///
+    /// The distinction matters more than it looks. Acquiring has no idea where the ball is, so the
+    /// biggest patch of the right colour is the best guess available. Following does know, and there
+    /// the biggest patch is often the *wrong* answer: the search window is deliberately wide and the
+    /// colour gate deliberately loose, so a stretch of netting or a sleeve can easily out-size a
+    /// small motion-blurred ball. Picking by position and size instead of by area is what lets the
+    /// window stay wide enough to catch a struck shot without handing it the nearest large object.
+    enum Preference {
+        /// The largest blob anywhere in the search area.
+        case largest
+        /// The blob closest to `point` whose radius falls inside `radii`. Nothing plausible means
+        /// no detection, rather than the least-bad one.
+        case nearest(to: CGPoint, radii: ClosedRange<Double>)
+    }
+
+    /// Scan for a blob of ball-coloured pixels.
     ///
     /// - Parameter region: normalized area to search (top-left origin). `nil` scans the whole frame.
     ///   Restricting it is what makes following a ball cheap — a small window can be sampled finely
@@ -63,11 +79,13 @@ enum BallDetector {
     /// - Parameter step: sampling stride in pixels. 8 turns a 1920-wide frame into a 240-wide mask,
     ///   which is ample for acquiring a ball and cheap enough to run every frame.
     /// - Parameter minPixels: reject specks; below this a blob is noise, not a ball.
+    /// - Parameter preference: how to choose between blobs. See `Preference`.
     static func detect(in buffer: CVPixelBuffer,
                        profile: BallProfile,
                        region: CGRect? = nil,
                        step: Int = 8,
-                       minPixels: Int = 4) -> Detection? {
+                       minPixels: Int = 4,
+                       preferring preference: Preference = .largest) -> Detection? {
         BallColor.withPixelReader(buffer) { reader -> Detection? in
             // Pixel bounds of the search area, clamped into the frame.
             let bounds: PixelBounds
@@ -104,10 +122,11 @@ enum BallDetector {
             }
             guard totalMatched >= minPixels else { return nil }
 
-            // 2. Largest connected blob, so a stray patch of the same colour elsewhere in the frame
-            //    can't drag the centre off the ball.
+            // 2. Every connected blob, so the right one can be *chosen* rather than assumed. A
+            //    stray patch of the same colour elsewhere then can't drag the centre off the ball,
+            //    and a follow can pass over a large distractor to reach the small ball beside it.
             var visited = [Bool](repeating: false, count: cols * rows)
-            var best: (count: Int, sumX: Int, sumY: Int) = (0, 0, 0)
+            var blobs: [(count: Int, sumX: Int, sumY: Int)] = []
             var queue: [Int] = []
 
             for start in 0..<(cols * rows) where mask[start] && !visited[start] {
@@ -134,26 +153,41 @@ enum BallDetector {
                         }
                     }
                 }
-                if count > best.count { best = (count, sumX, sumY) }
+                if count >= minPixels { blobs.append((count, sumX, sumY)) }
             }
-
-            guard best.count >= minPixels else { return nil }
+            guard !blobs.isEmpty else { return nil }
 
             // 3. Centre and equivalent-circle radius, back in FULL-FRAME terms — mask coordinates
             //    are relative to the search region, so its origin has to be added back.
-            let meanCol = Double(best.sumX) / Double(best.count)
-            let meanRow = Double(best.sumY) / Double(best.count)
-            let pixelX = Double(bounds.x0) + meanCol * Double(step)
-            let pixelY = Double(bounds.y0) + meanRow * Double(step)
-            let center = CGPoint(x: (pixelX + Double(step) / 2) / Double(reader.width),
-                                 y: (pixelY + Double(step) / 2) / Double(reader.height))
-            let radiusPx = (Double(best.count) / .pi).squareRoot() * Double(step)
+            func detection(_ blob: (count: Int, sumX: Int, sumY: Int)) -> Detection {
+                let meanCol = Double(blob.sumX) / Double(blob.count)
+                let meanRow = Double(blob.sumY) / Double(blob.count)
+                let pixelX = Double(bounds.x0) + meanCol * Double(step)
+                let pixelY = Double(bounds.y0) + meanRow * Double(step)
+                let center = CGPoint(x: (pixelX + Double(step) / 2) / Double(reader.width),
+                                     y: (pixelY + Double(step) / 2) / Double(reader.height))
+                // Area of the blob back-scaled by the stride, so a radius measured with a coarse
+                // scan and one measured with a fine scan are the same number for the same ball.
+                let radiusPx = (Double(blob.count) / .pi).squareRoot() * Double(step)
+                return Detection(center: center,
+                                 radiusNormalized: radiusPx / Double(reader.width),
+                                 pixelCount: blob.count,
+                                 totalMatched: totalMatched,
+                                 scannedPixels: cols * rows)
+            }
 
-            return Detection(center: center,
-                             radiusNormalized: radiusPx / Double(reader.width),
-                             pixelCount: best.count,
-                             totalMatched: totalMatched,
-                             scannedPixels: cols * rows)
+            // 4. Pick one.
+            switch preference {
+            case .largest:
+                return blobs.max { $0.count < $1.count }.map(detection)
+
+            case let .nearest(target, radii):
+                return blobs.lazy
+                    .map(detection)
+                    .filter { radii.contains($0.radiusNormalized) }
+                    .min { hypot($0.center.x - target.x, $0.center.y - target.y)
+                         < hypot($1.center.x - target.x, $1.center.y - target.y) }
+            }
         } ?? nil
     }
 

@@ -28,8 +28,8 @@ and motivating for practice, not a broadcast officiating tool.
 ## How it works (pipeline)
 ```
 Camera (120fps)
-  → VNDetectTrajectories        detect the ball's parabolic path in the image
-  → Ball color gate             reject anything that isn't the calibrated ball (hands, bat, people)
+  → BallDetector + BallTracker  find the ball by colour in each frame, and follow it between them
+  → ShotAssembler               decide which runs of sightings were a struck shot
   → Calibration (LiDAR/ref)     convert image motion into real speed + geometry
   → BallPhysics                 launch vector: speed, launch angle, azimuth
   → ScoringEngine               simulate flight + bounce + roll vs your field → outcome

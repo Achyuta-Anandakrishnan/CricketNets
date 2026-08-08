@@ -49,7 +49,14 @@ struct BallTracker {
 
     /// Sampling stride inside the window. Finer than the global scan because the area is small.
     var trackingStep = 3
-    var acquireStep = 8
+
+    /// Sampling stride for the full-frame scan.
+    ///
+    /// This sets the smallest ball that can ever be *acquired*: a blob needs `minPixels` samples on
+    /// it, so at stride `s` the ball's radius must be at least `sqrt(minPixels/π)·s` pixels. At 8
+    /// that's 9 px of radius, which a ball at the far end of LiDAR range doesn't have — and the
+    /// first sighting of a shot is the one frame that has no prediction to fall back on.
+    var acquireStep = 6
 
     struct Result {
         let detection: BallDetector.Detection
@@ -116,14 +123,17 @@ struct BallTracker {
 
         // The colour gate stays loose even in the wide bootstrap window, because a fast ball is
         // blurred on every frame including that one — a strict gate there simply can't get started.
-        // What keeps that safe is size: a ball's apparent radius barely changes between frames, so
-        // a blob of the wrong size is rejected regardless of how well its colour matches.
+        // What keeps that safe is position and size, which is why the choice between blobs is made
+        // here rather than left as "the biggest one". A wide window with a loose gate routinely
+        // contains something larger than the ball; asking for the *nearest blob of a plausible size*
+        // steps over that instead of grabbing it and then throwing the whole frame away.
         guard let found = BallDetector.detect(in: buffer,
                                               profile: profile.loosened(by: trackingTolerance),
                                               region: window,
                                               step: trackingStep,
-                                              minPixels: 3),
-              isPlausibleSize(found, comparedTo: last)
+                                              minPixels: 3,
+                                              preferring: .nearest(to: predicted,
+                                                                   radii: plausibleRadii(around: last)))
         else { return nil }
 
         update(found, at: time)
@@ -135,7 +145,8 @@ struct BallTracker {
     private mutating func acquire(in buffer: CVPixelBuffer,
                                   profile: BallProfile,
                                   time: TimeInterval) -> Result? {
-        guard let found = BallDetector.detect(in: buffer, profile: profile, step: acquireStep),
+        guard let found = BallDetector.detect(in: buffer, profile: profile, step: acquireStep,
+                                              preferring: .largest),
               found.looksLikeABall
         else {
             // Nothing credible anywhere — drop the lock so a stale prediction can't drag the next
@@ -147,14 +158,15 @@ struct BallTracker {
         return Result(detection: found, followed: false)
     }
 
-    /// Between two frames a ball barely changes apparent size — it would have to halve or double
-    /// its distance to do so. Anything outside that band is a different object that happens to be
-    /// the right colour, which is exactly what a loosened gate in a wide window risks finding.
-    private func isPlausibleSize(_ found: BallDetector.Detection,
-                                 comparedTo previous: BallDetector.Detection) -> Bool {
-        guard previous.radiusNormalized > 0 else { return true }
-        let ratio = found.radiusNormalized / previous.radiusNormalized
-        return ratio > 0.4 && ratio < 2.5
+    /// Apparent radii the ball could still plausibly have on the next frame.
+    ///
+    /// Between two frames a ball barely changes apparent size — it would have to halve or double its
+    /// distance to do so. The band is generous anyway, because motion blur smears the blob and
+    /// inflates its equivalent-circle radius. Anything outside it is a different object that happens
+    /// to be the right colour, which is exactly what a loosened gate in a wide window risks finding.
+    private func plausibleRadii(around previous: BallDetector.Detection) -> ClosedRange<Double> {
+        guard previous.radiusNormalized > 0 else { return 0...Double.greatestFiniteMagnitude }
+        return (previous.radiusNormalized * 0.4)...(previous.radiusNormalized * 2.5)
     }
 
     /// Record a sighting and re-estimate velocity.
